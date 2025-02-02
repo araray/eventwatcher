@@ -26,7 +26,7 @@ def run_daemon(watch_groups, db_path, pid_file, config):
     # Get the config file path and watch groups config path from the config dictionary.
     # (The __config_path__ key should be set in cli.py when loading the config.)
     config_file_path = config.get("__config_path__", "./config.toml")
-    watch_groups_config_path = config.get("watch_groups_config", "watch_groups.yaml")
+    watch_groups_config_path = config.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
 
     # Set up logging for the daemon.
     log_dir = os.path.join(".", config.get("logging", {}).get("log_dir", "logs"))
@@ -137,8 +137,7 @@ def run_daemon(watch_groups, db_path, pid_file, config):
                 # Store the config file path in the new config dictionary.
                 new_config["__config_path__"] = config_file_path
                 new_watch_groups_data = config_module.load_watch_groups_configs(
-                    new_config.get("watch_groups_config", "watch_groups.yaml")
-                )
+                    new_config.get("watch_groups", {}).get("watch_groups_config", "watch_groups.yaml")                )
                 new_watch_groups = new_watch_groups_data.get("watch_groups", [])
                 root_logger.info("Configuration reloaded. Restarting monitors.")
                 # Update variables for the next loop iteration.

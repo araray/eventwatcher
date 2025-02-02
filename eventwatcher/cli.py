@@ -97,7 +97,7 @@ def start(ctx, foreground):
     log_dir = get_log_dir(cfg, ctx.obj.get("config_path"))
     pid_file = get_pid_file(log_dir)
     # Load watch groups configuration from YAML.
-    watch_groups_config_path = cfg.get("watch_groups_config", "watch_groups.yaml")
+    watch_groups_config_path = cfg.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
     try:
         watch_groups_data = config.load_watch_groups_configs(watch_groups_config_path)
     except Exception as e:
@@ -105,6 +105,7 @@ def start(ctx, foreground):
         return
 
     watch_groups = watch_groups_data.get("watch_groups", [])
+
     if foreground:
         click.echo("Running in foreground...")
         monitors = []
