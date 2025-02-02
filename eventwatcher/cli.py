@@ -67,8 +67,8 @@ def monitor_once(ctx):
     config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
     db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
     log_dir = get_log_dir(cfg, ctx.obj.get("config_path"))
-    # Load watch groups configuration from YAML file or directory.
-    watch_groups_config_path = cfg.get("watch_groups_config", "watch_groups.yaml")
+    # Load watch groups configuration from YAML.
+    watch_groups_config_path = cfg.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
     try:
         watch_groups = config.load_watch_groups_configs(watch_groups_config_path)
     except Exception as e:
