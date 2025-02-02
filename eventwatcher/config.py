@@ -16,9 +16,6 @@ def load_config(cli_config_path=None):
 
     Returns:
         dict: The configuration settings.
-
-    Raises:
-        FileNotFoundError: If the configuration file cannot be found.
     """
     config_path = None
     if cli_config_path:
@@ -45,12 +42,33 @@ def load_watch_groups_config(watch_groups_path):
 
     Returns:
         dict: Watch groups configuration.
-
-    Raises:
-        FileNotFoundError: If the watch groups configuration file is not found.
     """
     if not os.path.exists(watch_groups_path):
         raise FileNotFoundError(f"Watch groups configuration file not found: {watch_groups_path}")
     with open(watch_groups_path, "r") as f:
         groups_config = yaml.safe_load(f)
     return groups_config
+
+def load_watch_groups_configs(path):
+    """
+    Load watch groups configuration from a YAML file or a directory containing YAML files.
+    If a directory is provided, all .yaml/.yml files are loaded and aggregated.
+
+    Args:
+        path (str): Path to a YAML file or directory.
+
+    Returns:
+        dict: Aggregated watch groups configuration with key 'watch_groups'.
+    """
+    if os.path.isdir(path):
+        aggregated = {"watch_groups": []}
+        for filename in os.listdir(path):
+            if filename.endswith(('.yaml', '.yml')):
+                file_path = os.path.join(path, filename)
+                with open(file_path, "r") as f:
+                    data = yaml.safe_load(f)
+                    if data and "watch_groups" in data:
+                        aggregated["watch_groups"].extend(data["watch_groups"])
+        return aggregated
+    else:
+        return load_watch_groups_config(path)

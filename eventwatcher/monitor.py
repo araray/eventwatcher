@@ -4,6 +4,11 @@ import pwd
 import grp
 import time
 import glob
+import logging
+from . import db
+from . import logger
+from eventwatcher.rule_helpers import aggregate_metric, get_previous_metric
+
 
 def compute_hashes(file_path):
     """
@@ -69,7 +74,7 @@ def collect_dir_info(dir_path, max_depth=None):
 
     Args:
         dir_path (str): Path to the directory.
-        max_depth (int, optional): Maximum levels to traverse. If None, traverse indefinitely.
+        max_depth (int, optional): Maximum levels to traverse.
 
     Returns:
         dict: Directory statistics and list of contained files/directories.
@@ -113,7 +118,6 @@ def collect_sample(watch_item, max_depth=None, pattern=None):
         dict: A mapping from each resolved path to its collected information.
     """
     sample = {}
-    # Resolve glob patterns.
     paths = glob.glob(watch_item)
     if not paths:
         sample[watch_item] = {'error': 'No matching file or directory found'}
@@ -128,8 +132,6 @@ def collect_sample(watch_item, max_depth=None, pattern=None):
             sample[path] = {'error': 'Not a file or directory'}
     return sample
 
-import threading
-
 class Monitor:
     """
     Monitor class to watch directories/files based on a given configuration.
@@ -137,50 +139,59 @@ class Monitor:
     This class periodically collects samples, evaluates rules,
     logs the results, and records data to a SQLite database.
     """
-    def __init__(self, watch_group, db_path, log_func=print):
+    def __init__(self, watch_group, db_path, log_dir, log_level="INFO"):
         """
         Initialize the Monitor.
 
         Args:
             watch_group (dict): Configuration for the watch group.
             db_path (str): Path to the SQLite database.
-            log_func (callable): Function used for logging output.
+            log_dir (str): Directory for log files.
+            log_level (str): Logging level.
         """
         self.watch_group = watch_group
         self.db_path = db_path
-        self.log = log_func
-        # Enforce a minimum sample rate of 60 seconds.
         self.sample_rate = max(watch_group.get('sample_rate', 60), 60)
         self.max_samples = watch_group.get('max_samples', 5)
         self.max_depth = watch_group.get('max_depth', None)
         self.pattern = watch_group.get('pattern', None)
         self.watch_items = watch_group.get('watch_items', [])
         self.running = False
+        # Set up a logger for this watch group
+        log_filename = f"{self.watch_group.get('name', 'Unnamed').replace(' ', '_')}.log"
+        numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+        self.logger = logger.setup_logger(self.watch_group.get('name', 'Unnamed'), log_dir, log_filename, level=numeric_level)
 
     def evaluate_rules(self, sample):
         """
         Evaluate rules defined in the watch group against the collected sample.
-
-        Each rule is a dictionary with:
-         - name: Event name.
-         - condition: A Python expression as a string that is evaluated against 'data' (the sample).
+        Rules can now use helper functions like `aggregate` for pattern matching.
 
         Returns:
-            list: Names of events that are triggered.
+            list: Names of triggered events.
         """
         triggered = []
         rules = self.watch_group.get('rules', [])
+        current_time = time.time()
+        # Create an extended context with helper functions
+        eval_context = {
+            "data": sample,
+            "now": current_time,
+            "min": min,
+            "max": max,
+            "sum": sum,
+            "len": len,
+            "aggregate": aggregate_metric,
+            "get_previous_metric": lambda pattern, metric: get_previous_metric(self.db_path, self.watch_group.get('name', 'Unnamed'), pattern, metric)
+        }
         for rule in rules:
             condition = rule.get('condition')
             event_name = rule.get('name', 'Unnamed Event')
             try:
-                # For security, use a restricted eval context.
-                if condition:
-                    # 'data' holds the sample information.
-                    if eval(condition, {"__builtins__": {}}, {"data": sample}):
-                        triggered.append(event_name)
+                if condition and eval(condition, {"__builtins__": {}}, eval_context):
+                    triggered.append(event_name)
             except Exception as e:
-                self.log(f"Error evaluating rule '{event_name}': {e}")
+                self.logger.error(f"Error evaluating rule '{event_name}': {e}")
         return triggered
 
     def take_sample(self):
@@ -197,21 +208,37 @@ class Monitor:
 
     def run_once(self):
         """
-        Perform one monitoring cycle: take a sample, evaluate rules, log events, and store data in the DB.
+        Perform one monitoring cycle: take a sample, evaluate rules, log events,
+        and store data in the DB (both as a full JSON sample and exploded into individual entries).
 
         Returns:
             tuple: (sample, list_of_triggered_events)
         """
         sample = self.take_sample()
         events = self.evaluate_rules(sample)
-        self.log(f"Sample for group '{self.watch_group.get('name', 'Unnamed')}': {sample}")
+        self.logger.info(f"Sample: {sample}")
         if events:
-            self.log(f"Triggered events: {events}")
-        # Store sample and events in the database.
-        from . import db
+            self.logger.info(f"Triggered events: {events}")
+
+        # Store the full JSON sample in the samples table.
         db.insert_sample(self.db_path, self.watch_group.get('name', 'Unnamed'), sample)
+
+        # Also store exploded sample entries.
+        sample_epoch = int(time.time())
+        for file_path, file_data in sample.items():
+            # Only store entries that do not contain an error.
+            if isinstance(file_data, dict) and "error" not in file_data:
+                db.insert_exploded_sample(
+                    self.db_path,
+                    self.watch_group.get('name', 'Unnamed'),
+                    sample_epoch,
+                    file_path,
+                    file_data
+                )
+
         for event in events:
             db.insert_event(self.db_path, self.watch_group.get('name', 'Unnamed'), event, sample)
+
         return sample, events
 
     def run(self):
@@ -219,7 +246,7 @@ class Monitor:
         Run the monitoring loop indefinitely based on the sample rate.
         """
         self.running = True
-        self.log(f"Starting monitor for group '{self.watch_group.get('name', 'Unnamed')}' with sample rate {self.sample_rate} seconds.")
+        self.logger.info(f"Starting monitor for group '{self.watch_group.get('name', 'Unnamed')}' with sample rate {self.sample_rate} seconds.")
         while self.running:
             self.run_once()
             time.sleep(self.sample_rate)
@@ -229,3 +256,4 @@ class Monitor:
         Stop the monitoring loop.
         """
         self.running = False
+        self.logger.info(f"Stopping monitor for group '{self.watch_group.get('name', 'Unnamed')}'.")

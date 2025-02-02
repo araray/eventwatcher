@@ -17,6 +17,7 @@ next/
 !examples/watch_groups.yaml
 *.test
 logs/
+eventwatcher.db
 
 # Distribution / packaging
 .Python
