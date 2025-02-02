@@ -242,9 +242,13 @@ class Monitor:
             condition = rule.get('condition')
             event_name = rule.get('name', 'Unnamed Event')
             try:
-                if condition and eval(condition, {"__builtins__": {}}, eval_context):
-                    # Include the rule itself and the diff in the triggered event
+                self.logger.debug(f"Evaluating rule '{event_name}': now={current_time}, "
+                                  f"min_last_modified={aggregate_metric(sample, '*', 'last_modified', min)}")
+                condition_result = eval(condition, {"__builtins__": {}}, eval_context)
+                self.logger.debug(f"Condition '{condition}' evaluated to {condition_result}")
+                if condition and condition_result:
                     triggered.append({"rule": rule, "diff": diff_result})
+
             except Exception as e:
                 self.logger.error(f"Error evaluating rule '{event_name}': {e}")
         return triggered
