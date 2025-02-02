@@ -1,0 +1,18 @@
+# Watch groups configuration file for EventWatcher
+
+watch_groups:
+  - name: "Example Group"       # A unique identifier for this group.
+    watch_items:
+      - "SOME_PATH/*.test"  # Glob pattern for test files.
+      - "ANOTHER_PATH/*.log"   # Glob pattern for log files.
+    sample_rate: 60              # Sampling interval in seconds (minimum enforced to 60 seconds).
+    max_samples: 5               # Maximum number of samples to retain for historical analysis.
+    max_depth: 2                 # Maximum directory depth for scanning (if a directory is specified).
+    pattern: "ERROR"             # Optional string to search for within files.
+    rules:
+      - name: "Modified in Last 10 Minutes"  # Name of the event rule.
+        # Rule condition: checks if the earliest 'last_modified' timestamp among
+        # files matching the '*.test' pattern is within the last 10 minutes.
+        # Uses the 'aggregate' helper function (see documentation) along with the safe built-in 'min'.
+        condition: "now - aggregate(data, '*.test', 'last_modified', min) < 10 * 60"
+

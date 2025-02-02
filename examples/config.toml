@@ -1,0 +1,17 @@
+# Global configuration for EventWatcher
+
+[database]
+# The path to the SQLite database file where full JSON samples, events,
+# and exploded samples will be stored.
+db_name = "/PATH_TO_/eventwatcher.db"
+
+# The path to the watch groups configuration (YAML) file.
+watch_groups_config = "PATH_TO/watch_groups.yaml"
+
+[logging]
+# Directory where log files will be written.
+log_dir = "PATH_TO/logs"
+
+# Logging level can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL.
+level = "INFO"
+
