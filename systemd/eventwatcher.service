@@ -1,0 +1,12 @@
+[Unit]
+Description=EventWatcher Service
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/eventwatcher start
+Restart=on-failure
+User=[[ USERNAME TO RUN THE DAEMON ]]
+Environment=EVENTWATCHER_CONFIG_DIR=[[ PATH_TO_EVENTWATCHER_CONFIG_DIR ]]
+
+[Install]
+WantedBy=multi-user.target

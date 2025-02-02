@@ -1,0 +1,22 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="eventwatcher",
+    version="0.1.0",
+    description="A file/directory event monitoring tool with daemon support",
+    author="Araray Velho",
+    packages=find_packages(),
+    install_requires=[
+        "click",
+        "toml",
+        "pyyaml",
+        "python-daemon",
+        "rich",
+        "tabulate"
+    ],
+    entry_points={
+        "console_scripts": [
+            "eventwatcher=eventwatcher.cli:main"
+        ]
+    },
+)
