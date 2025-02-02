@@ -8,7 +8,6 @@ from . import config
 from . import db
 from . import monitor
 from . import daemon as daemon_module
-from . import logger
 
 DEFAULT_PID_FILENAME = "eventwatcher.pid"
 
@@ -21,6 +20,8 @@ def main(ctx, config_path):
     """
     try:
         cfg = config.load_config(config_path)
+        # Store the config file path in the config dict for use by the daemon.
+        cfg["__config_path__"] = config_path
     except Exception as e:
         click.echo(f"Error loading configuration: {e}")
         ctx.abort()
@@ -132,7 +133,6 @@ def stop(ctx):
     Stop the EventWatcher daemon.
     """
     cfg = ctx.obj.get("config")
-    config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
     log_dir = get_log_dir(cfg, ctx.obj.get("config_path"))
     pid_file = get_pid_file(log_dir)
     if not os.path.exists(pid_file):
