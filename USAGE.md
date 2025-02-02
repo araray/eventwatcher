@@ -1,118 +1,114 @@
 # USAGE Guide for EventWatcher
 
-This guide explains how to use EventWatcher as both a command-line tool and a library. It covers configuration, running the monitor, advanced rule evaluation, and an overview of the database structure.
+This guide explains how to use EventWatcher as both a command-line tool and as a library. The latest release of EventWatcher includes advanced features such as differential analysis, structured event metadata, per-file directory explosion, and flexible rule evaluation.
 
 ---
 
 ## Overview
 
-EventWatcher is a Python-based tool that monitors files and directories for changes based on user-defined rules. It supports two configuration files:
-- A **global configuration** (`config.toml`) for general settings (database, logging, etc.).
-- A **watch groups configuration** (`watch_groups.yaml`) that defines what to monitor, how often to sample, and the rules that trigger events.
+EventWatcher is a Python-based tool that monitors files and directories for changes based on user-defined rules. In this release, EventWatcher has been enhanced with:
 
-The latest version introduces:
-- **Enhanced Rule Evaluation:**
-  Use helper functions (e.g., `aggregate`) along with safe built-ins (`min`, `max`, etc.) so that rules can reference metrics over files matching glob patterns.
+- **Differential Analysis:**
+  Each monitoring cycle compares the current sample with the previous one to detect exactly what has changed (e.g., new files, deleted files, or modifications with detailed deltas such as changes in file size or modification time).
 
-- **Exploded Samples:**
-  Each file/directory from a monitoring cycle is stored as an individual row in the database, enabling SQL-based queries and comparisons between current and historical data.
+- **Structured Event Metadata:**
+  Events now include structured information with additional fields:
+  - **Event Type:** e.g., `created`, `modified`, `deleted`, or `pattern_match`.
+  - **Severity Level:** e.g., `INFO`, `WARNING`, or `CRITICAL`.
+  - **Affected File(s):** Only the files that triggered the event.
+  - **Timestamp Differences:** The computed delta (e.g., change in last modified time) for affected files.
+
+- **Per-File Directory Explosion:**
+  With the new configuration option `explode_directories`, directories can be scanned recursively (up to a configurable maximum depth) so that each file is recorded individually with detailed metrics (size, last modified, creation time, MD5, SHA256, and pattern detection). If disabled, directories will be stored as aggregated snapshots.
+
+- **Flexible Rule Evaluation:**
+  Rule conditions can now refer to both the current sample and historical data (via the computed diff). The evaluation context provides:
+  - `data`: The current sample (a mapping of file paths to their metrics).
+  - `diff`: The computed differences between the previous and current samples.
+  - `now`: The current epoch time.
+  - Helper functions such as `aggregate`, `get_previous_metric`, and `compute_diff`.
 
 ---
 
 ## CLI Commands
 
-EventWatcher comes with several CLI commands to manage configuration, the database, and the monitoring service.
+EventWatcher comes with several CLI commands:
 
-### 1. Display the Loaded Configuration
+1. **Display the Loaded Configuration:**
 
-Prints out the currently loaded configuration settings.
+   ```bash
+   eventwatcher show-config --config path/to/config.toml
+   ```
 
-```bash
-eventwatcher show-config --config path/to/config.toml
-```
+2. **Initialize the Database:**
 
-### 2. Initialize the Database
+   This command creates the necessary tables, including the updated `events` table with structured metadata.
 
-Creates (if they do not exist) the necessary tables:
-- `events` for triggered events,
-- `samples` for full JSON snapshots of each monitoring cycle, and
-- `exploded_samples` for per-file metrics.
+   ```bash
+   eventwatcher init-db --config path/to/config.toml
+   ```
 
-```bash
-eventwatcher init-db --config path/to/config.toml
-```
+3. **Run a Single Monitoring Cycle:**
 
-### 3. Run a Single Monitoring Cycle
+   Collects a sample from all watch groups, computes differences with the previous sample, evaluates rules, and stores both the full sample and any triggered events.
 
-Collect a single sample from all watch groups, evaluate rules, log the sample, and insert any triggered events into the database.
+   ```bash
+   eventwatcher monitor-once --config path/to/config.toml
+   ```
 
-```bash
-eventwatcher monitor-once --config path/to/config.toml
-```
+4. **Start the Service:**
 
-### 4. Start the Service
+   - **Foreground Mode (for testing):**
 
-Launch EventWatcher either in the foreground (useful for testing) or as a daemon (recommended for production).
+     ```bash
+     eventwatcher start --foreground --config path/to/config.toml
+     ```
 
-- **Foreground Mode:**
+   - **Daemon Mode (recommended for production):**
 
-  ```bash
-  eventwatcher start --foreground --config path/to/config.toml
-  ```
+     ```bash
+     eventwatcher start --config path/to/config.toml
+     ```
 
-- **Daemon Mode:**
+5. **Stop the Service:**
 
-  ```bash
-  eventwatcher start --config path/to/config.toml
-  ```
+   ```bash
+   eventwatcher stop --config path/to/config.toml
+   ```
 
-### 5. Stop the Daemon
+6. **Check Daemon Status:**
 
-Stop a running daemon by sending a termination signal.
+   ```bash
+   eventwatcher status --config path/to/config.toml
+   ```
 
-```bash
-eventwatcher stop --config path/to/config.toml
-```
+7. **Search the Database for Events:**
 
-### 6. Check Daemon Status
+   ```bash
+   eventwatcher search_db --watch-group "Example Group" --config path/to/config.toml
+   ```
 
-Check whether the daemon is running.
+8. **Search Through Log Files:**
 
-```bash
-eventwatcher status --config path/to/config.toml
-```
+   ```bash
+   eventwatcher search_logs --term "ERROR" --config path/to/config.toml
+   ```
 
-### 7. Search the Database and Logs
+9. **Restart the Daemon:**
 
-- **Search Events in the Database:**
-
-  ```bash
-  eventwatcher search_db --watch-group "Example Group" --config path/to/config.toml
-  ```
-
-- **Search through Log Files:**
-
-  ```bash
-  eventwatcher search_logs --term "ERROR" --config path/to/config.toml
-  ```
-
-### 8. Restart the Daemon
-
-Restart the running daemon.
-
-```bash
-eventwatcher restart --config path/to/config.toml
-```
+   ```bash
+   eventwatcher restart --config path/to/config.toml
+   ```
 
 ---
 
 ## Configuration Files
 
-EventWatcher requires two configuration files.
+EventWatcher requires two configuration files: one global TOML file and one watch groups YAML file.
 
 ### config.toml
 
-This file contains global settings. For example:
+The global configuration file defines settings such as the database location, logging options, and the path to the watch groups configuration.
 
 ```toml
 [database]
@@ -126,7 +122,7 @@ level = "INFO"
 
 ### watch_groups.yaml
 
-Defines watch groups, watch items, sample rate, and rules. For example:
+This file defines one or more watch groups, specifying what to monitor, the sample rate, and the rules (with advanced conditions and metadata). A sample configuration is shown below:
 
 ```yaml
 watch_groups:
@@ -134,15 +130,15 @@ watch_groups:
     watch_items:
       - "/av/data/repos/eventwatcher/*.test"
       - "/av/data/repos/eventwatcher/*.log"
-    sample_rate: 60 # seconds (minimum enforced to 60)
+    sample_rate: 60                # Minimum enforced to 60 seconds
     max_samples: 5
     max_depth: 2
     pattern: "ERROR"
+    explode_directories: true      # Enable per-file monitoring for directories
     rules:
       - name: "Modified in Last 10 Minutes"
-        # Evaluates the earliest modification time among files matching '*.test'
-        # using the helper 'aggregate' and built-in 'min'. If this time is within 10 minutes,
-        # the rule triggers.
+        event_type: "modified"     # Optional: override default event type detection
+        severity: "WARNING"
         condition: "now - aggregate(data, '*.test', 'last_modified', min) < 10 * 60"
 ```
 
@@ -150,7 +146,7 @@ watch_groups:
 
 ## Using EventWatcher as a Library
 
-EventWatcher can be embedded in your own Python projects. The following example shows how to load the configuration, select a watch group, and run a monitoring cycle.
+EventWatcher can be embedded into your Python projects. The following example demonstrates loading configurations, selecting a watch group, and running a monitoring cycle:
 
 ```python
 from eventwatcher.config import load_config, load_watch_groups_config
@@ -162,7 +158,7 @@ config = load_config("path/to/config.toml")
 # Load the watch groups configuration.
 watch_groups = load_watch_groups_config(config.get("watch_groups_config", "watch_groups.yaml"))
 
-# Select the first watch group (or select by name).
+# Select a watch group (by index or by name).
 group_config = watch_groups.get("watch_groups", [])[0]
 
 # Create a Monitor instance.
@@ -182,21 +178,22 @@ print("Triggered Events:")
 print(triggered_events)
 ```
 
-### Rule Evaluation in Code
+### Rule Evaluation Context
 
-When the monitor collects a sample, it evaluates rules with an extended context that includes:
-- `data`: The collected sample (a dictionary with file paths as keys).
-- `now`: The current epoch time.
-- `aggregate`: A helper function to aggregate file metrics based on a glob pattern.
-- Safe built-ins like `min`, `max`, etc.
+When a monitoring cycle is run, rules are evaluated using an extended context that includes:
 
-This lets you write rule conditions like:
+- **data:** The current sample (a mapping of file paths to their metrics).
+- **diff:** The computed differences between the previous sample and the current sample. This contains information on created, deleted, or modified files.
+- **now:** The current epoch time.
+- **aggregate:** A helper function to perform aggregation (e.g., `min`, `max`).
+- **get_previous_metric:** Retrieves historical metric values.
+- **compute_diff:** A helper to compute differences between samples.
+
+This context allows you to write advanced rules. For example, a rule condition could check for significant file size increases like so:
 
 ```yaml
-condition: "now - aggregate(data, '*.test', 'last_modified', min) < 10 * 60"
+condition: "diff.get('modified') and any(delta > 20 for file, delta in diff.get('modified', {}).items())"
 ```
-
-The rule checks whether the minimum `last_modified` timestamp among files matching `*.test` is within the last 10 minutes.
 
 ---
 
@@ -205,15 +202,24 @@ The rule checks whether the minimum `last_modified` timestamp among files matchi
 EventWatcher uses SQLite and maintains several tables:
 
 - **events:**
-  Records each triggered event with a unique event ID, watch group name, event description, the full JSON sample that triggered it, and a timestamp.
+  Each event record now includes:
+  - `event_uid`
+  - `watch_group`
+  - `event` (the rule name/description)
+  - `event_type` (e.g., created, modified, deleted, pattern_match)
+  - `severity`
+  - `affected_files` (a JSON list of files that triggered the event)
+  - `timestamp_diff` (a JSON mapping of file paths to their timestamp deltas)
+  - `sample_data` (the full JSON sample that triggered the event)
+  - `timestamp`
 
 - **samples:**
-  Stores the entire JSON sample collected during each monitoring cycle.
+  Stores the complete JSON sample from each monitoring cycle.
 
 - **exploded_samples:**
-  Each file or directory monitored is stored as a separate row with columns for:
+  Each file or directory entry is stored separately with columns for:
   - `watch_group`
-  - `sample_epoch` (timestamp of the monitoring cycle)
+  - `sample_epoch`
   - `file_path`
   - `size`
   - `last_modified`
@@ -222,8 +228,4 @@ EventWatcher uses SQLite and maintains several tables:
   - `sha256`
   - `pattern_found`
 
-This design allows you to run SQL queries to compare current metrics against historical data for advanced rule evaluation.
-
----
-
-Happy monitoring!
+This design enables detailed SQL queries and historical comparisons.

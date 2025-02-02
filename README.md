@@ -1,204 +1,132 @@
 # EventWatcher
 
-EventWatcher is a versatile Python library and CLI tool that monitors files and directories for changes and events based on user‐defined rules. It supports configuration via TOML (for global settings) and YAML (for watch groups), runs as a daemon or in the foreground, and stores detailed sample data in a SQLite database.
-
-This version includes an improved event system and rule evaluation framework. It allows you to write rules that reference file metrics through glob patterns rather than hardcoded file paths. In addition, samples are "exploded" into a dedicated database table to support advanced, SQL‐based comparisons and historical queries.
-
----
-
-## Table of Contents
-
-1. [Features](#features)
-2. [Installation](#installation)
-3. [Configuration](#configuration)
-   - [Main Configuration (TOML)](#main-configuration-toml)
-   - [Watch Groups Configuration (YAML)](#watch-groups-configuration-yaml)
-4. [Usage](#usage)
-   - [Command-Line Interface (CLI)](#command-line-interface-cli)
-   - [As a Library](#as-a-library)
-5. [Rule Evaluation Enhancements](#rule-evaluation-enhancements)
-6. [Database Structure](#database-structure)
-7. [Systemd Service](#systemd-service)
-8. [Testing](#testing)
-9. [Future Improvements](#future-improvements)
-10. [License](#license)
-
----
+EventWatcher is a Python-based file and directory monitoring tool that detects changes based on user-defined rules. It supports both command-line interface (CLI) and library usage. In its latest release, EventWatcher has been significantly enhanced with advanced features such as differential analysis, structured event metadata, per-file directory explosion, and flexible rule evaluation.
 
 ## Features
 
-- **Flexible Configuration:**
-  - Global settings in a TOML file.
-  - Watch groups defined in YAML for easy, human‐readable rules.
+- **Differential Analysis:**
+  Compares the current sample with the previous one to detect detailed changes. This includes:
+  - Detecting new, deleted, or modified files.
+  - Reporting specific deltas (e.g., file size changes or modifications in file timestamps).
 
-- **Robust Monitoring:**
-  - Monitor files and directories using glob patterns.
-  - Collect detailed information including size, timestamps, file hashes, and pattern matches.
+- **Structured Event Metadata:**
+  Events are now recorded with rich metadata, including:
+  - **Event Type:** e.g., `created`, `modified`, `deleted`, or `pattern_match`.
+  - **Severity Level:** e.g., `INFO`, `WARNING`, or `CRITICAL`.
+  - **Affected Files:** A list of files that triggered the event.
+  - **Timestamp Differences:** Computed deltas for modifications (for example, changes in `last_modified` time).
 
-- **Enhanced Rule Evaluation:**
-  - Write flexible rules that can aggregate metrics over file sets.
-  - Use a safe evaluation context with helper functions (e.g., `aggregate`) and trusted built-in functions like `min`, `max`, etc.
+- **Per-File Directory Explosion:**
+  With the new configuration option `explode_directories`, directories can be scanned recursively (up to a configurable maximum depth) so that each file is recorded individually with detailed metrics such as size, last modified, creation time, MD5, SHA256, and pattern detection. When disabled, directories are stored as aggregated snapshots.
 
-- **Data Storage & Advanced Querying:**
-  - Full samples are logged as JSON.
-  - Exploded samples (one row per file/directory per sample cycle) enable SQL‐based comparisons.
+- **Flexible Rule Evaluation:**
+  Rule conditions are evaluated in an extended context that includes:
+  - The current sample (`data`).
+  - The computed differences between the previous and current samples (`diff`).
+  - The current timestamp (`now`).
+  - Helper functions like `aggregate`, `get_previous_metric`, and `compute_diff` for advanced rule conditions.
 
-- **CLI and Daemon Support:**
-  - A rich command-line interface for management.
-  - Daemon mode with systemd integration for continuous monitoring.
+- **Daemon Mode:**
+  Run EventWatcher as a background service with auto-reload capability upon configuration changes.
 
----
+- **Comprehensive Logging and Database Storage:**
+  All samples and events are logged and stored in an SQLite database for later analysis and querying.
 
 ## Installation
 
-Clone the repository and install via pip:
+To install EventWatcher, clone the repository and install the dependencies using pip:
 
 ```bash
-git clone <repository_url>
+git clone https://github.com/your-username/eventwatcher.git
 cd eventwatcher
 pip install .
 ```
 
-Alternatively, if the package is published to PyPI:
-
-```bash
-pip install eventwatcher
-```
-
----
-
-## Configuration
-
-EventWatcher uses two configuration files: one for global settings and another for watch group definitions.
-
-### Main Configuration (TOML)
-
-The main configuration file (`config.toml`) specifies settings such as the database file, logging directory, and the path to your watch groups configuration.
-
-Example `config.toml`:
-
-```toml
-[database]
-db_name = "eventwatcher.db"
-
-watch_groups_config = "watch_groups.yaml"
-
-[logging]
-log_dir = "logs"
-level = "INFO"
-```
-
-### Watch Groups Configuration (YAML)
-
-The watch groups configuration file (`watch_groups.yaml`) defines one or more groups, each with its own watch items, sampling rate, rules, and optional settings such as maximum depth and search patterns.
-
-Example `watch_groups.yaml`:
-
-```yaml
-watch_groups:
-  - name: "Example Group"
-    watch_items:
-      - "/path/to/monitor/*.test"
-      - "/path/to/monitor/*.log"
-    sample_rate: 60  # Minimum enforced sample rate is 60 seconds.
-    max_samples: 5
-    max_depth: 2
-    pattern: "ERROR"
-    rules:
-      - name: "Modified in Last 10 Minutes"
-        # This rule triggers if the earliest last_modified timestamp among files matching '*.test'
-        # is less than 10 minutes ago.
-        condition: "now - aggregate(data, '*.test', 'last_modified', min) < 10 * 60"
-```
-
----
+The project requires Python 3.11 or higher.
 
 ## Usage
 
 ### Command-Line Interface (CLI)
 
-EventWatcher comes with a CLI tool that provides several commands:
+EventWatcher provides several CLI commands to manage monitoring, configuration, and the database.
 
-- **show-config:**
-  Display the currently loaded configuration.
+- **Show Loaded Configuration:**
 
   ```bash
   eventwatcher show-config --config path/to/config.toml
   ```
 
-- **init-db:**
-  Initialize the SQLite database (creates tables such as `events`, `samples`, and `exploded_samples`).
+- **Initialize the Database:**
+
+  This command creates the necessary tables—including the enhanced `events` table with structured metadata.
 
   ```bash
   eventwatcher init-db --config path/to/config.toml
   ```
 
-- **monitor-once:**
-  Run a single monitoring cycle (sample).
+- **Run a Single Monitoring Cycle:**
+
+  Collects a sample from all watch groups, computes differences with the previous sample, evaluates rules, and stores both the full sample and any triggered events.
 
   ```bash
   eventwatcher monitor-once --config path/to/config.toml
   ```
 
-- **start:**
-  Start the monitoring service. Use `--foreground` to run in the foreground.
+- **Start the Service:**
 
-  ```bash
-  eventwatcher start --config path/to/config.toml
-  eventwatcher start --foreground --config path/to/config.toml
-  ```
+  - **Foreground mode (for testing):**
 
-- **stop:**
-  Stop the running daemon.
+    ```bash
+    eventwatcher start --foreground --config path/to/config.toml
+    ```
+
+  - **Daemon mode (for production):**
+
+    ```bash
+    eventwatcher start --config path/to/config.toml
+    ```
+
+- **Stop the Service:**
 
   ```bash
   eventwatcher stop --config path/to/config.toml
   ```
 
-- **status:**
-  Check the status of the daemon.
+- **Check Service Status:**
 
   ```bash
   eventwatcher status --config path/to/config.toml
   ```
 
-- **search_db:**
-  Query stored events from the database.
+- **Search the Database:**
 
   ```bash
   eventwatcher search_db --watch-group "Example Group" --config path/to/config.toml
   ```
 
-- **search_logs:**
-  Search log files for a specified term.
+- **Search Logs:**
 
   ```bash
   eventwatcher search_logs --term "ERROR" --config path/to/config.toml
   ```
 
-- **restart:**
-  Restart the daemon.
+- **Restart the Service:**
 
   ```bash
   eventwatcher restart --config path/to/config.toml
   ```
 
-- **show_db:**
-  Display all events stored in the database.
+For a detailed guide on using EventWatcher, please refer to [USAGE.md](USAGE.md).
 
-  ```bash
-  eventwatcher show_db --config path/to/config.toml
-  ```
+### Library Usage
 
-### As a Library
-
-You can also use EventWatcher programmatically in your own projects:
+You can also integrate EventWatcher into your own Python projects:
 
 ```python
 from eventwatcher.config import load_config, load_watch_groups_config
 from eventwatcher.monitor import Monitor
 
-# Load global configuration and watch groups.
+# Load configurations.
 config = load_config("path/to/config.toml")
 watch_groups = load_watch_groups_config(config.get("watch_groups_config", "watch_groups.yaml"))
 
@@ -208,133 +136,88 @@ group_config = watch_groups.get("watch_groups", [])[0]
 # Create a Monitor instance.
 monitor_instance = Monitor(
     group_config,
-    db_path="path/to/eventwatcher.db",
-    log_dir="logs",
+    db_path="/path/to/eventwatcher.db",
+    log_dir="/path/to/logs",
     log_level="INFO"
 )
 
 # Run one monitoring cycle.
 sample, events = monitor_instance.run_once()
-print("Sample:", sample)
-print("Triggered Events:", events)
+
+print("Collected Sample:")
+print(sample)
+print("Triggered Events:")
+print(events)
 ```
 
----
+## Configuration
 
-## Rule Evaluation Enhancements
+EventWatcher requires two configuration files: a global TOML file and a watch groups YAML file.
 
-The rule evaluation system has been upgraded to support more flexible and abstract expressions. Key changes include:
+### Global Configuration (`config.toml`)
 
-- **Glob Pattern Matching:**
-  Instead of hardcoding file paths, you can now use glob patterns to reference files in a watch group.
+This file defines settings such as the database location, logging options, and the path to the watch groups configuration.
 
-- **Helper Functions:**
-  The `aggregate` helper function (defined in `eventwatcher/rule_helpers.py`) aggregates a specified metric from files matching a glob pattern. For example, to get the minimum `last_modified` value among all files matching `*.test`, you can use:
+```toml
+[database]
+db_name = "/path/to/eventwatcher.db"
+watch_groups_config = "/path/to/watch_groups.yaml"
 
-  ```python
-  aggregate(data, '*.test', 'last_modified', min)
-  ```
+[logging]
+log_dir = "/path/to/logs"
+level = "INFO"
+```
 
-- **Safe Evaluation Context:**
-  The evaluation context passed to `eval()` includes only safe built-ins (such as `min`, `max`, `sum`, and `len`) along with our helper functions. This provides both flexibility and security.
+### Watch Groups Configuration (`watch_groups.yaml`)
 
-Example rule configuration:
+This file defines one or more watch groups, specifying what to monitor, the sample rate, and the rules (with advanced conditions and metadata).
 
 ```yaml
-rules:
-  - name: "Modified in Last 10 Minutes"
-    condition: "now - aggregate(data, '*.test', 'last_modified', min) < 10 * 60"
+watch_groups:
+  - name: "Example Group"
+    watch_items:
+      - "/path/to/*.test"
+      - "/path/to/*.log"
+    sample_rate: 60                # Minimum enforced to 60 seconds
+    max_samples: 5
+    max_depth: 2
+    pattern: "ERROR"
+    explode_directories: true      # Enable per-file monitoring for directories
+    rules:
+      - name: "Modified in Last 10 Minutes"
+        event_type: "modified"     # Optional: override default event type detection
+        severity: "WARNING"
+        condition: "now - aggregate(data, '*.test', 'last_modified', min) < 10 * 60"
 ```
 
----
+For further details on configuration and rule syntax, see [USAGE.md](USAGE.md).
 
-## Database Structure
+## Database Schema
 
-EventWatcher uses SQLite to store both full JSON samples and exploded file metrics for advanced querying.
+EventWatcher uses an SQLite database with the following tables:
 
 - **events:**
-  Stores triggered events along with a unique event ID, watch group name, event description, full JSON sample, and timestamp.
+  Contains structured event records with fields such as:
+  - `event_uid`
+  - `watch_group`
+  - `event` (the rule name/description)
+  - `event_type` (e.g., created, modified, deleted, pattern_match)
+  - `severity`
+  - `affected_files` (a JSON list of files that triggered the event)
+  - `timestamp_diff` (a JSON mapping of file paths to their timestamp deltas)
+  - `sample_data` (the full JSON sample that triggered the event)
+  - `timestamp`
 
 - **samples:**
-  Records the complete JSON sample for each monitoring cycle.
+  Stores complete JSON samples from each monitoring cycle.
 
 - **exploded_samples:**
-  Each file or directory from a sample cycle is stored as an individual row. This table includes columns for:
-  - `watch_group`
-  - `sample_epoch` (the timestamp when the sample was taken)
-  - `file_path`
-  - `size`
-  - `last_modified`
-  - `creation_time`
-  - `md5`
-  - `sha256`
-  - `pattern_found`
+  Stores individual file records (if directory explosion is enabled) with detailed metrics such as size, last modified time, creation time, and cryptographic hashes.
 
-These exploded samples enable SQL-based analysis to compare current and historical metrics.
+## Contributing
 
----
-
-## Systemd Service
-
-To run EventWatcher as a daemon, you can use a systemd service file. Create a file at `/etc/systemd/system/eventwatcher.service` with the following content:
-
-```ini
-[Unit]
-Description=EventWatcher Service
-After=network.target
-
-[Service]
-ExecStart=/usr/local/bin/eventwatcher start
-Restart=on-failure
-User=youruser
-Environment=EVENTWATCHER_CONFIG_DIR=/path/to/config/dir
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then enable and start the service:
-
-```bash
-sudo systemctl enable eventwatcher
-sudo systemctl start eventwatcher
-```
-
----
-
-## Testing
-
-Automated tests are provided using pytest. To run the test suite:
-
-```bash
-pytest
-```
-
-The tests cover configuration loading, database operations, CLI commands, and monitor functionality.
-
----
-
-## Future Improvements
-
-- **Event Deduplication:**
-  Mechanisms to avoid repeated alerts for the same event condition will be added in future versions.
-
-- **Advanced SQL-Based Rule Evaluation:**
-  With exploded samples, more sophisticated SQL queries and historical comparisons can be implemented directly in rules.
-
-- **Automated Sample Cleanup:**
-  Strategies for pruning older samples while preserving full logs may be developed.
-
----
+Contributions are welcome! Please fork the repository and submit a pull request. Ensure that your changes are accompanied by relevant tests and updated documentation.
 
 ## License
 
-EventWatcher is released under the [MIT License](LICENSE).
-
----
-
-## Contact
-
-For questions, issues, or contributions, please open an issue on the GitHub repository or contact the author.
-
-Happy monitoring!
+EventWatcher is licensed under the [MIT License](LICENSE).

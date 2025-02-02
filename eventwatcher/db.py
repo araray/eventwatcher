@@ -22,9 +22,6 @@ def init_db(db_path):
     Initialize the SQLite database with the required tables.
 
     This function creates the 'events' and 'samples' tables if they do not exist.
-
-    Args:
-        db_path (str): Path to the SQLite database file.
     """
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = get_db_connection(db_path)
@@ -36,6 +33,10 @@ def init_db(db_path):
             event_uid TEXT NOT NULL,
             watch_group TEXT NOT NULL,
             event TEXT NOT NULL,
+            event_type TEXT,
+            severity TEXT,
+            affected_files TEXT,
+            timestamp_diff TEXT,
             sample_data TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(event_uid)
@@ -77,23 +78,37 @@ def init_exploded_samples(db_path):
     conn.commit()
     conn.close()
 
-def insert_event(db_path, watch_group, event, sample_data):
+def insert_event(db_path, watch_group, event, sample_data,
+                 event_type=None, severity=None, affected_files=None, timestamp_diff=None):
     """
-    Insert an event record into the database.
+    Insert an event record into the database with structured metadata.
 
     Args:
         db_path (str): Path to the database.
         watch_group (str): Name of the watch group.
         event (str): Event name/description.
         sample_data (dict): The sample data triggering the event.
+        event_type (str): Type of event (e.g., created, modified, deleted, pattern_match).
+        severity (str): Severity level (e.g., INFO, WARNING, CRITICAL).
+        affected_files (list): List of file paths that triggered the event.
+        timestamp_diff (dict): Differences in timestamp (e.g., modification delta) for affected files.
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
     event_uid = str(uuid.uuid4())
     cur.execute('''
-        INSERT INTO events (event_uid, watch_group, event, sample_data)
-        VALUES (?, ?, ?, ?)
-    ''', (event_uid, watch_group, event, json.dumps(sample_data)))
+        INSERT INTO events (event_uid, watch_group, event, event_type, severity, affected_files, timestamp_diff, sample_data)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (
+        event_uid,
+        watch_group,
+        event,
+        event_type,
+        severity,
+        json.dumps(affected_files),
+        json.dumps(timestamp_diff),
+        json.dumps(sample_data)
+    ))
     conn.commit()
     conn.close()
 
@@ -146,3 +161,23 @@ def insert_exploded_sample(db_path, watch_group, sample_epoch, file_path, file_d
     ))
     conn.commit()
     conn.close()
+
+def get_last_sample(db_path, watch_group):
+    """
+    Retrieve the most recent sample for a given watch group.
+
+    Args:
+        db_path (str): Path to the database.
+        watch_group (str): Name of the watch group.
+
+    Returns:
+        tuple: (sample (dict), timestamp (str)) if found; otherwise (None, None)
+    """
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+    cur.execute("SELECT sample, timestamp FROM samples WHERE watch_group = ? ORDER BY timestamp DESC LIMIT 1", (watch_group,))
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return json.loads(row[0]), row[1]
+    return None, None
