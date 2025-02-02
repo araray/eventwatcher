@@ -11,7 +11,7 @@ def aggregate_metric(data, pattern, metric, func=min):
         func (callable): Aggregation function (e.g., min, max, sum, or a custom function).
 
     Returns:
-        The aggregated value, or None if no matching files or metric values are found.
+        The aggregated value, or 0 if no matching files or metric values are found.
     """
     values = [
         entry.get(metric)
@@ -19,7 +19,8 @@ def aggregate_metric(data, pattern, metric, func=min):
         if fnmatch.fnmatch(key, pattern) and entry.get(metric) is not None
     ]
     if not values:
-        return None
+        # Return 0 so that subtraction (e.g. now - 0) yields a large number, preventing the rule from triggering.
+        return 0
     return func(values)
 
 def get_previous_metric(db_path, watch_group, file_pattern, metric, order='DESC'):
@@ -38,7 +39,6 @@ def get_previous_metric(db_path, watch_group, file_pattern, metric, order='DESC'
     """
     conn = __import__('eventwatcher.db', fromlist=['get_db_connection']).get_db_connection(db_path)
     cur = conn.cursor()
-    # A basic SQL example (you might later want to use parameters or a more robust approach):
     cur.execute(f'''
         SELECT {metric} FROM exploded_samples
         WHERE watch_group = ?
