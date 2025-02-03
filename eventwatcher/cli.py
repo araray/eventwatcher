@@ -2,6 +2,7 @@ import os
 import signal
 import time
 import threading
+import json
 import click
 import sqlite3
 from . import config
@@ -13,14 +14,18 @@ DEFAULT_PID_FILENAME = "eventwatcher.pid"
 
 @click.group()
 @click.option("--config", "-c", "config_path", default=None, help="Path to configuration TOML file.")
+@click.option("--debug", is_flag=True, help="Enable debug logging.")
 @click.pass_context
-def main(ctx, config_path):
+def main(ctx, config_path, debug):
     """
     EventWatcher CLI: Monitor files and directories for events.
     """
     try:
         cfg = config.load_config(config_path)
-        # Store the config file path in the config dict for use by the daemon.
+        # If --debug is passed, override logging level to DEBUG.
+        if debug:
+            cfg.setdefault("logging", {})["level"] = "DEBUG"
+        # Store the config file path for later use.
         cfg["__config_path__"] = config_path
     except Exception as e:
         click.echo(f"Error loading configuration: {e}")
@@ -28,7 +33,6 @@ def main(ctx, config_path):
     ctx.obj = {"config": cfg, "config_path": config_path}
 
 def get_log_dir(cfg, config_path):
-    # Determine logs directory from config.
     config_dir = os.path.dirname(cfg.get("config_path", config_path) or "./config.toml")
     return os.path.join(config_dir, cfg.get("logging", {}).get("log_dir", "logs"))
 
@@ -54,7 +58,6 @@ def init_db(ctx):
     config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
     db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
     db.init_db(db_path)
-    db.init_exploded_samples(db_path)
     click.echo(f"Database initialized at {db_path}")
 
 @main.command()
@@ -78,9 +81,9 @@ def monitor_once(ctx):
     for group in watch_groups.get("watch_groups", []):
         m = monitor.Monitor(group, db_path, log_dir, log_level=cfg.get("logging", {}).get("level", "INFO"))
         sample, events = m.run_once()
-        click.echo(f"Group '{group.get('name', 'Unnamed')}' sample: {sample}")
+        click.echo(f"Group '{group.get('name', 'Unnamed')}' sample: {json.dumps(sample, indent=2)}")
         if events:
-            click.echo(f"Triggered events: {events}")
+            click.echo(f"Triggered events: {json.dumps(events, indent=2)}")
         else:
             click.echo("No events triggered.")
 
@@ -144,7 +147,6 @@ def stop(ctx):
     try:
         os.kill(pid, signal.SIGTERM)
         click.echo(f"Sent SIGTERM to daemon (pid {pid}).")
-        # Optionally, wait for process to terminate.
         time.sleep(2)
         if os.path.exists(pid_file):
             os.remove(pid_file)
