@@ -14,13 +14,13 @@ def get_db_connection(db_path):
 def init_db(db_path):
     """
     Initialize the SQLite database with the required tables.
-    Creates the 'events' table and the 'samples' table (formerly exploded_samples).
+    Creates the 'events' table and the 'samples' table.
     """
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = get_db_connection(db_path)
     cur = conn.cursor()
 
-    # Create events table (storing only key information)
+    # Create events table
     cur.execute('''
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,7 +36,7 @@ def init_db(db_path):
         )
     ''')
 
-    # Create samples table (per-file detailed records)
+    # Create samples table
     cur.execute('''
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -59,7 +59,6 @@ def insert_event(db_path, watch_group, event, sample_epoch,
                  event_type=None, severity=None, affected_files=None):
     """
     Insert an event record into the events table.
-    Instead of storing raw sample data, we store the sample_epoch and affected files.
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
@@ -106,7 +105,7 @@ def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_dat
 
 def get_last_event_for_rule(db_path, watch_group, rule_name, file_path):
     """
-    Retrieve the most recent event for a given watch_group, rule (event description), and file.
+    Retrieve the most recent event for a given watch_group, rule and file.
     Returns a dict with event data or None if not found.
     """
     conn = get_db_connection(db_path)
@@ -120,7 +119,6 @@ def get_last_event_for_rule(db_path, watch_group, rule_name, file_path):
     row = cur.fetchone()
     conn.close()
     if row:
-        # Check if the file_path is in affected_files
         affected_files = json.loads(row['affected_files'])
         if file_path in affected_files:
             return dict(row)
@@ -144,3 +142,15 @@ def get_sample_record(db_path, watch_group, sample_epoch, file_path):
     if row:
         return dict(row)
     return None
+
+def has_previous_sample(db_path, watch_group):
+    """
+    Check if there is any previous sample data for the given watch group.
+    Returns True if at least one record exists; otherwise False.
+    """
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+    cur.execute('SELECT COUNT(*) FROM samples WHERE watch_group = ?', (watch_group,))
+    count = cur.fetchone()[0]
+    conn.close()
+    return count > 0

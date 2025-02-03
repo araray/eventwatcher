@@ -4,9 +4,37 @@ import threading
 import time
 import os
 import logging
+import psutil
 from eventwatcher import monitor
 from eventwatcher import logger
 import eventwatcher.config as config_module
+
+def log_daemon_status(root_logger, watch_groups):
+    """
+    Log detailed daemon status information using psutil and watch groups info.
+    """
+    proc = psutil.Process(os.getpid())
+    status_info = {
+        "PID": proc.pid,
+        "CPU %": proc.cpu_percent(interval=0.1),
+        "Memory %": proc.memory_percent(),
+        "Memory RSS": proc.memory_info().rss,
+        "Threads": proc.num_threads(),
+        "Started At": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(proc.create_time())),
+        "Watch Groups": len(watch_groups)
+    }
+    # Optionally, list each watch group's name.
+    group_names = [wg.get("name", "Unnamed") for wg in watch_groups]
+    status_info["Watch Group Names"] = ", ".join(group_names)
+    root_logger.info("Daemon Status:\n" + "\n".join(f"{k}: {v}" for k, v in status_info.items()))
+
+def periodic_status_logger(root_logger, watch_groups, interval=60):
+    """
+    Log daemon status periodically.
+    """
+    while True:
+        log_daemon_status(root_logger, watch_groups)
+        time.sleep(interval)
 
 def run_daemon(watch_groups, db_path, pid_file, config):
     """
@@ -19,6 +47,11 @@ def run_daemon(watch_groups, db_path, pid_file, config):
     log_dir = os.path.join(".", config.get("logging", {}).get("log_dir", "logs"))
     numeric_level = getattr(logging, config.get("logging", {}).get("level", "INFO").upper(), logging.INFO)
     root_logger = logger.setup_logger("EventWatcherDaemon", log_dir, "daemon.log", level=numeric_level, console=True)
+
+    # Start a background thread to log status if debug is enabled.
+    if numeric_level <= logging.DEBUG:
+        status_thread = threading.Thread(target=periodic_status_logger, args=(root_logger, watch_groups), daemon=True)
+        status_thread.start()
 
     def run_monitors():
         monitors = []
@@ -35,6 +68,9 @@ def run_daemon(watch_groups, db_path, pid_file, config):
             t.daemon = True
             t.start()
             threads.append(t)
+
+        # Log initial status
+        log_daemon_status(root_logger, watch_groups)
 
         try:
             config_mtime = os.path.getmtime(config_file_path)
@@ -95,7 +131,6 @@ def run_daemon(watch_groups, db_path, pid_file, config):
                     root_logger.error("A monitor thread has stopped unexpectedly.")
             time.sleep(10)
 
-            # End of the run_monitors loop.
         for m in monitors:
             m.stop()
         for t in threads:

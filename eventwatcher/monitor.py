@@ -2,6 +2,7 @@ import os
 import time
 import hashlib
 import logging
+import json
 from eventwatcher import db, rules, rule_helpers
 
 def compute_file_md5(file_path, block_size=65536):
@@ -85,7 +86,6 @@ class Monitor:
 
     def setup_logger(self, log_level):
         from eventwatcher import logger as event_logger
-        # Create a file name for the watch group log (spaces replaced with underscores).
         file_name = f"{self.watch_group.get('name', 'Unnamed').replace(' ', '_')}.log"
         return event_logger.setup_logger(
             f"Monitor-{self.watch_group.get('name', 'Unnamed')}",
@@ -104,6 +104,16 @@ class Monitor:
         for file_path, file_data in sample.items():
             db.insert_sample_record(self.db_path, watch_group_name, sample_epoch, file_path, file_data)
 
+        # When in DEBUG mode, log the raw JSON sample.
+        if self.logger.getEffectiveLevel() <= logging.DEBUG:
+            self.logger.debug(f"Raw sample JSON: {json.dumps(sample, indent=2)}")
+
+        # If there is no previous sample, skip rule evaluation.
+        if not db.has_previous_sample(self.db_path, watch_group_name):
+            self.logger.info("No previous sample found; skipping rule evaluation for this cycle.")
+            self.logger.info("Monitoring cycle completed.")
+            return sample, []  # Return an empty list of events.
+
         now = int(time.time())
         context = {
             "data": sample,
@@ -112,38 +122,37 @@ class Monitor:
         }
 
         triggered = rules.evaluate_rules(self.watch_group.get("rules", []), context)
-        deduped_events = []
+        triggered_events = []
 
+        # Process each triggered rule and insert one event per affected file.
         for event in triggered:
             rule_name = event.get("name")
             event_type = event.get("event_type")
             severity = event.get("severity")
             affected_files = event.get("affected_files", [])
-            deduped_files = []
             for file_path in affected_files:
+                # Deduplication: skip if the same event was already inserted for this file.
                 prev_event = db.get_last_event_for_rule(self.db_path, watch_group_name, rule_name, file_path)
                 if prev_event:
                     prev_sample = db.get_sample_record(self.db_path, watch_group_name, prev_event["sample_epoch"], file_path)
                     current_metrics = sample.get(file_path, {})
-                    if prev_sample:
-                        if (prev_sample.get("md5") == current_metrics.get("md5") and
-                            prev_sample.get("last_modified") == current_metrics.get("last_modified")):
-                            self.logger.info(f"Skipping duplicate event for {file_path} under rule '{rule_name}'.")
-                            continue
-                deduped_files.append(file_path)
-            if deduped_files:
+                    if prev_sample and (prev_sample.get("md5") == current_metrics.get("md5") and
+                                        prev_sample.get("last_modified") == current_metrics.get("last_modified")):
+                        self.logger.info(f"Skipping duplicate event for {file_path} under rule '{rule_name}'.")
+                        continue
+                # Insert an event for this file.
                 db.insert_event(self.db_path, watch_group_name, rule_name, sample_epoch,
-                                event_type=event_type, severity=severity, affected_files=deduped_files)
-                deduped_events.append({
+                                event_type=event_type, severity=severity, affected_files=[file_path])
+                triggered_events.append({
                     "rule": rule_name,
                     "event_type": event_type,
                     "severity": severity,
-                    "affected_files": deduped_files,
+                    "affected_file": file_path,
                     "sample_epoch": sample_epoch
                 })
 
         self.logger.info("Monitoring cycle completed.")
-        return sample, deduped_events
+        return sample, triggered_events
 
     def run(self):
         while not self._stop:
