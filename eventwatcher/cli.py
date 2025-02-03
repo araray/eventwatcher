@@ -15,6 +15,7 @@ from rich.console import Console
 from rich.table import Table
 import csv
 import io
+import sys
 
 DEFAULT_PID_FILENAME = "eventwatcher.pid"
 
@@ -221,6 +222,7 @@ def show_events(ctx, watch_group, out_format):
     else:
         cur.execute("SELECT * FROM events")
     rows = cur.fetchall()
+    columns = [column[0] for column in cur.description]
     conn.close()
 
     if out_format.lower() == "json":
@@ -241,7 +243,7 @@ def show_events(ctx, watch_group, out_format):
         # Default: tabulate using rich table
         table = Table(title="EventWatcher Events")
         if rows:
-            for col in rows[0].keys():
+            for col in columns:
                 table.add_column(col)
             for row in rows:
                 table.add_row(*[str(val) for val in row])
