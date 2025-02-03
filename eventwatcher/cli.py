@@ -9,6 +9,7 @@ from eventwatcher import config
 from eventwatcher import db
 from eventwatcher import monitor
 from eventwatcher import daemon as daemon_module
+from eventwatcher import rule_helpers
 import psutil
 from rich.console import Console
 from rich.table import Table
