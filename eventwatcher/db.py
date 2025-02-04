@@ -235,3 +235,18 @@ def has_previous_sample(db_path, watch_group):
     count = cur.fetchone()[0]
     conn.close()
     return count > 1
+
+def remove_old_samples(db_path, watch_group, retain_samples = 1):
+    """
+    Remove old samples from the samples table for the given watch_group.
+    """
+    # Get the sample_epoch of the Nth last sample
+    epoch = min(get_last_n_sample_epochs(db_path, watch_group, retain_samples))
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+    cur.execute('''
+        DELETE FROM samples
+        WHERE watch_group = ? AND sample_epoch < ?
+    ''', (watch_group, epoch))
+    conn.commit()
+    conn.close()
