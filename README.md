@@ -37,7 +37,7 @@ EventWatcher is a Python-based file and directory monitoring tool that detects c
 To install EventWatcher, clone the repository and install the dependencies using pip:
 
 ```bash
-git clone https://github.com/your-username/eventwatcher.git
+git clone https://github.com/araray/eventwatcher.git
 cd eventwatcher
 pip install .
 ```
