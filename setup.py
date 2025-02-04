@@ -12,7 +12,8 @@ setup(
         "pyyaml",
         "python-daemon",
         "rich",
-        "tabulate"
+        "tabulate",
+        "psutil"
     ],
     entry_points={
         "console_scripts": [
