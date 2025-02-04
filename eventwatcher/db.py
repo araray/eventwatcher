@@ -251,3 +251,25 @@ def remove_old_samples(db_path, watch_group, retain_samples = 1):
     ''', (watch_group, epoch))
     conn.commit()
     conn.close()
+
+def count_samples(db_path, watch_group):
+    """
+    Count the number of samples for the given watch_group.
+    """
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+    cur.execute('SELECT COUNT(*) FROM samples WHERE watch_group = ?', (watch_group,))
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
+
+def count_sample_epochs(db_path, watch_group):
+    """
+    Count the number of unique sample epochs for the given watch_group.
+    """
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+    cur.execute('SELECT COUNT(DISTINCT sample_epoch) FROM samples WHERE watch_group = ?', (watch_group,))
+    count = cur.fetchone()[0]
+    conn.close()
+    return count
