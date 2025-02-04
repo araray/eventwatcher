@@ -1,13 +1,15 @@
-import daemon
-from daemon.pidfile import PIDLockFile
+import logging
+import os
 import threading
 import time
-import os
-import logging
+
+import daemon
 import psutil
-from eventwatcher import monitor
-from eventwatcher import logger
+from daemon.pidfile import PIDLockFile
+
 import eventwatcher.config as config_module
+from eventwatcher import logger, monitor
+
 
 def log_daemon_status(root_logger, watch_groups):
     """

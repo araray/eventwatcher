@@ -8,8 +8,8 @@ It includes two types of workers:
 Both worker threads run in an infinite loop until a stop signal is set.
 """
 
-import threading
 import logging
+import threading
 from queue import Empty
 
 # Configure logging for debug output

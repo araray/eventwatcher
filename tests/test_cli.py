@@ -1,10 +1,13 @@
 import os
 import tempfile
+
 import pytest
 import toml
 import yaml
 from click.testing import CliRunner
+
 from eventwatcher import cli
+
 
 @pytest.fixture
 def temp_config(tmp_path):

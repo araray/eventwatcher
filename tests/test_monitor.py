@@ -1,8 +1,11 @@
 import os
 import tempfile
-import pytest
-from eventwatcher import monitor
 import time
+
+import pytest
+
+from eventwatcher import monitor
+
 
 def create_temp_file(tmp_path, content="Hello World"):
     file_path = tmp_path / "test.txt"

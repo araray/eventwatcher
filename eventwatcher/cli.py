@@ -1,21 +1,21 @@
+import csv
+import io
+import json
 import os
 import signal
-import time
-import threading
-import json
-import click
 import sqlite3
-from eventwatcher import config
-from eventwatcher import db
-from eventwatcher import monitor
-from eventwatcher import daemon as daemon_module
-from eventwatcher import rule_helpers
+import sys
+import threading
+import time
+
+import click
 import psutil
 from rich.console import Console
 from rich.table import Table
-import csv
-import io
-import sys
+
+from eventwatcher import config
+from eventwatcher import daemon as daemon_module
+from eventwatcher import db, monitor, rule_helpers
 
 DEFAULT_PID_FILENAME = "eventwatcher.pid"
 

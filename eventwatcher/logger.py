@@ -1,6 +1,7 @@
 import logging
 import os
 
+
 def setup_logger(name, log_dir, log_filename, level=logging.INFO, console=True):
     """
     Set up and return a logger with file and (optionally) console handlers.

@@ -1,6 +1,8 @@
-from queue import Queue
-from eventwatcher.utils import spawn_periodic_worker, spawn_queue_worker
 import time
+from queue import Queue
+
+from eventwatcher.utils import spawn_periodic_worker, spawn_queue_worker
+
 
 # Define a simple periodic function.
 def say_hello():

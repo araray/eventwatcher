@@ -1,9 +1,12 @@
+import json
 import os
 import sqlite3
 import tempfile
-import json
+
 import pytest
+
 from eventwatcher import db
+
 
 @pytest.fixture
 def temp_db(tmp_path):

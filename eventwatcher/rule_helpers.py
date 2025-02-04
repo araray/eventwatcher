@@ -1,5 +1,6 @@
 import fnmatch
 
+
 def aggregate_metric(data, pattern, metric, func=min):
     """
     Aggregates a given metric from the sample data for files matching a glob pattern.

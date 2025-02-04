@@ -1,9 +1,12 @@
 import os
 import tempfile
+
+import pytest
 import toml
 import yaml
-import pytest
+
 from eventwatcher import config
+
 
 def test_load_config(tmp_path):
     # Create a temporary config file.

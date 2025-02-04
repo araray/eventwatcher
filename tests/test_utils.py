@@ -5,7 +5,9 @@ Unit tests for the utils module.
 import time
 import unittest
 from queue import Queue
+
 from eventwatcher.utils import spawn_periodic_worker, spawn_queue_worker
+
 
 class TestThreadFactory(unittest.TestCase):
     def test_periodic_worker(self):

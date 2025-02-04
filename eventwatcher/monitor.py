@@ -1,9 +1,11 @@
+import hashlib
+import json
+import logging
 import os
 import time
-import hashlib
-import logging
-import json
-from eventwatcher import db, rules, rule_helpers
+
+from eventwatcher import db, rule_helpers, rules
+
 
 def compute_file_md5(file_path, block_size=65536):
     """Compute MD5 hash of a file."""
