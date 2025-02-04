@@ -44,6 +44,9 @@ def init_db(db_path):
             sample_epoch INTEGER NOT NULL,
             file_path TEXT NOT NULL,
             size INTEGER,
+            user_id INTEGER,
+            group_id INTEGER,
+            mode INTEGER,
             last_modified REAL,
             creation_time REAL,
             md5 TEXT,
@@ -86,14 +89,18 @@ def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_dat
     cur = conn.cursor()
     cur.execute('''
         INSERT INTO samples (
-            watch_group, sample_epoch, file_path, size, last_modified,
+            watch_group, sample_epoch, file_path, size,
+            user_id, group_id, mode, last_modified,
             creation_time, md5, sha256, pattern_found
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (
         watch_group,
         sample_epoch,
         file_path,
         file_data.get("size"),
+        file_data.get("user_id"),
+        file_data.get("group_id"),
+        file_data.get("mode"),
         file_data.get("last_modified"),
         file_data.get("creation_time"),
         file_data.get("md5"),

@@ -48,6 +48,9 @@ def collect_sample(watch_group, log_dir):
                 metrics["creation_time"] = stat.st_ctime
                 metrics["md5"] = compute_file_md5(path)
                 metrics["sha256"] = compute_file_sha256(path)
+                metrics["user_id"] = stat.st_uid
+                metrics["group_id"] = stat.st_gid
+                metrics["mode"] =  oct(stat.st_mode & 0o777)
                 if pattern:
                     with open(path, "r", errors="ignore") as f:
                         content = f.read()
