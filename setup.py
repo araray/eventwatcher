@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="eventwatcher",
-    version="0.1.0",
+    version="0.2.0",
     description="A file/directory event monitoring tool with daemon support",
     author="Araray Velho",
     packages=find_packages(),
@@ -12,7 +12,8 @@ setup(
         "pyyaml",
         "python-daemon",
         "rich",
-        "tabulate"
+        "tabulate",
+        "psutil"
     ],
     entry_points={
         "console_scripts": [

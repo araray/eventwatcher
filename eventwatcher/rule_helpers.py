@@ -19,13 +19,12 @@ def aggregate_metric(data, pattern, metric, func=min):
         if fnmatch.fnmatch(key, pattern) and entry.get(metric) is not None
     ]
     if not values:
-        # Return 0 so that subtraction (e.g. now - 0) yields a large number, preventing the rule from triggering.
         return 0
     return func(values)
 
 def get_previous_metric(db_path, watch_group, file_pattern, metric, order='DESC'):
     """
-    Retrieve the most recent metric value from exploded_samples for a given file pattern.
+    Retrieve the most recent metric value from samples for a given file pattern.
 
     Args:
         db_path (str): Path to the database.
@@ -39,11 +38,12 @@ def get_previous_metric(db_path, watch_group, file_pattern, metric, order='DESC'
     """
     conn = __import__('eventwatcher.db', fromlist=['get_db_connection']).get_db_connection(db_path)
     cur = conn.cursor()
-    cur.execute(f'''
-        SELECT {metric} FROM exploded_samples
-        WHERE watch_group = ?
+    query = f'''
+        SELECT {metric} FROM samples
+        WHERE watch_group = ? AND file_path LIKE ?
         ORDER BY sample_epoch {order} LIMIT 1
-    ''', (watch_group,))
+    '''
+    cur.execute(query, (watch_group, file_pattern))
     row = cur.fetchone()
     conn.close()
     if row:

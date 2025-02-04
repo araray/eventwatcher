@@ -4,40 +4,56 @@ import threading
 import time
 import os
 import logging
-from . import monitor
-from . import logger
+import psutil
+from eventwatcher import monitor
+from eventwatcher import logger
 import eventwatcher.config as config_module
+
+def log_daemon_status(root_logger, watch_groups):
+    """
+    Log detailed daemon status information using psutil and watch groups info.
+    """
+    proc = psutil.Process(os.getpid())
+    status_info = {
+        "PID": proc.pid,
+        "CPU %": proc.cpu_percent(interval=0.1),
+        "Memory %": proc.memory_percent(),
+        "Memory RSS": proc.memory_info().rss,
+        "Threads": proc.num_threads(),
+        "Started At": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(proc.create_time())),
+        "Watch Groups": len(watch_groups)
+    }
+    # Optionally, list each watch group's name.
+    group_names = [wg.get("name", "Unnamed") for wg in watch_groups]
+    status_info["Watch Group Names"] = ", ".join(group_names)
+    root_logger.info("Daemon Status:\n" + "\n".join(f"{k}: {v}" for k, v in status_info.items()))
+
+def periodic_status_logger(root_logger, watch_groups, interval=60):
+    """
+    Log daemon status periodically.
+    """
+    while True:
+        log_daemon_status(root_logger, watch_groups)
+        time.sleep(interval)
 
 def run_daemon(watch_groups, db_path, pid_file, config):
     """
     Run the monitoring service as a daemon with auto-reload functionality.
-
-    The daemon monitors changes to the main configuration file and the watch groups configuration.
-    If any changes are detected, the daemon will stop current monitors, reload the configuration,
-    and restart the monitors.
-
-    Args:
-        watch_groups (list): List of watch group configurations.
-        db_path (str): Path to the SQLite database.
-        pid_file (str): Path to the PID file.
-        config (dict): The configuration settings. It should include the key '__config_path__'
-                       which is the path to the main configuration file.
     """
-    # Get the config file path and watch groups config path from the config dictionary.
-    # (The __config_path__ key should be set in cli.py when loading the config.)
     config_file_path = config.get("__config_path__", "./config.toml")
     watch_groups_config_path = config.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
 
     # Set up logging for the daemon.
     log_dir = os.path.join(".", config.get("logging", {}).get("log_dir", "logs"))
     numeric_level = getattr(logging, config.get("logging", {}).get("level", "INFO").upper(), logging.INFO)
-    root_logger = logger.setup_logger("EventWatcherDaemon", log_dir, "daemon.log", level=numeric_level)
+    root_logger = logger.setup_logger("EventWatcherDaemon", log_dir, "daemon.log", level=numeric_level, console=True)
+
+    # Start a background thread to log status if debug is enabled.
+    if numeric_level <= logging.DEBUG:
+        status_thread = threading.Thread(target=periodic_status_logger, args=(root_logger, watch_groups), daemon=True)
+        status_thread.start()
 
     def run_monitors():
-        """
-        Start monitor threads for each watch group and poll for configuration changes.
-        When a change is detected, all monitors are stopped.
-        """
         monitors = []
         threads = []
         for group in watch_groups:
@@ -53,7 +69,9 @@ def run_daemon(watch_groups, db_path, pid_file, config):
             t.start()
             threads.append(t)
 
-        # Record initial modification times.
+        # Log initial status
+        log_daemon_status(root_logger, watch_groups)
+
         try:
             config_mtime = os.path.getmtime(config_file_path)
         except Exception as e:
@@ -61,7 +79,6 @@ def run_daemon(watch_groups, db_path, pid_file, config):
             config_mtime = None
 
         if os.path.isdir(watch_groups_config_path):
-            # For a directory, build a dict mapping file path to its modification time.
             watch_groups_mtimes = {}
             for filename in os.listdir(watch_groups_config_path):
                 if filename.endswith(('.yaml', '.yml')):
@@ -77,10 +94,8 @@ def run_daemon(watch_groups, db_path, pid_file, config):
                 root_logger.error(f"Error getting modification time for watch groups config file: {e}")
                 watch_groups_mtimes = None
 
-        # Poll for configuration changes every 10 seconds.
         while True:
             reload_needed = False
-            # Check main config file.
             try:
                 new_config_mtime = os.path.getmtime(config_file_path)
                 if config_mtime and new_config_mtime != config_mtime:
@@ -88,7 +103,6 @@ def run_daemon(watch_groups, db_path, pid_file, config):
             except Exception as e:
                 root_logger.error(f"Error checking config file mtime: {e}")
 
-            # Check watch groups config (either directory or single file).
             if os.path.isdir(watch_groups_config_path):
                 for filename in os.listdir(watch_groups_config_path):
                     if filename.endswith(('.yaml', '.yml')):
@@ -112,39 +126,31 @@ def run_daemon(watch_groups, db_path, pid_file, config):
                 root_logger.info("Configuration change detected. Restarting monitors.")
                 break
 
-            # Also check that all monitor threads are alive.
             for t in threads:
                 if not t.is_alive():
                     root_logger.error("A monitor thread has stopped unexpectedly.")
             time.sleep(10)
 
-        # Stop all monitors.
         for m in monitors:
             m.stop()
         for t in threads:
             t.join()
 
-    # Use PIDLockFile to manage the PID file.
     pidfile_obj = PIDLockFile(pid_file)
     with daemon.DaemonContext(pidfile=pidfile_obj):
         root_logger.info("Daemon started with auto-reload enabled.")
-        # Run in a loop: each iteration runs the monitors until a config change is detected.
         while True:
             run_monitors()
-            # After monitors have stopped, reload configuration.
             try:
                 new_config = config_module.load_config(config_file_path)
-                # Store the config file path in the new config dictionary.
                 new_config["__config_path__"] = config_file_path
                 new_watch_groups_data = config_module.load_watch_groups_configs(
-                    new_config.get("watch_groups", {}).get("watch_groups_config", "watch_groups.yaml")                )
+                    new_config.get("watch_groups", {}).get("watch_groups_config", "watch_groups.yaml")
+                )
                 new_watch_groups = new_watch_groups_data.get("watch_groups", [])
                 root_logger.info("Configuration reloaded. Restarting monitors.")
-                # Update variables for the next loop iteration.
                 watch_groups = new_watch_groups
                 config = new_config
-                # Optionally, update db_path or log_dir if they have changed.
             except Exception as e:
                 root_logger.error(f"Error reloading configuration: {e}")
-                # If there is an error, wait a bit before trying again.
                 time.sleep(10)
