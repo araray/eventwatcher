@@ -231,7 +231,7 @@ def show_events(ctx, watch_group, out_format):
         if rows:
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(rows[0].keys())
+            writer.writerow(columns)
             for row in rows:
                 writer.writerow(list(row))
             click.echo(output.getvalue())
