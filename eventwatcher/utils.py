@@ -9,7 +9,6 @@ Both worker threads run in an infinite loop until a stop signal is set.
 """
 
 import threading
-import time
 import logging
 from queue import Empty
 
