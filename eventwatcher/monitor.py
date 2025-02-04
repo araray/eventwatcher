@@ -133,7 +133,7 @@ class Monitor:
             self.logger.debug(f"Raw sample JSON: {json.dumps(sample, indent=2)}")
 
         # If there is no previous sample, skip rule evaluation.
-        if not db.has_previous_sample(self.db_path, watch_group_name):
+        if not previous_sample:
             self.logger.info("No previous sample found; skipping rule evaluation for this cycle.")
             self.logger.info("Monitoring cycle completed.")
             return sample, []  # Return an empty list of events.
