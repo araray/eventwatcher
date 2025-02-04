@@ -150,6 +150,80 @@ def get_sample_record(db_path, watch_group, sample_epoch, file_path):
         return dict(row)
     return None
 
+def get_last_n_sample_epochs(db_path, watch_group, n_samples = 1):
+    """
+    Retrieve the last N sample epochs for a given watch_group.
+    Returns a list of sample_epoch values.
+    """
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+    query = '''
+        SELECT DISTINCT sample_epoch FROM samples
+        WHERE watch_group = ?
+        ORDER BY sample_epoch DESC
+        LIMIT ?
+    '''
+    cur.execute(query, (watch_group, n_samples))
+    rows = cur.fetchall()
+    conn.close()
+    return [row['sample_epoch'] for row in rows]
+
+def get_last_n_samples(db_path, watch_group, file_path = None, n_samples = 1):
+    """
+    Retrieve the sample record for a given watch_group, sample_epoch, and file_path.
+    Returns a dict with sample data or None if not found.
+    """
+    conn = get_db_connection(db_path)
+    cur = conn.cursor()
+
+    epochs = get_last_n_sample_epochs(db_path, watch_group, n_samples)
+    if not epochs:
+        return []
+
+    epochs_str = ', '.join(map(str, epochs))
+
+    if file_path is None:
+        query = '''
+            SELECT * FROM samples
+            WHERE watch_group = ?
+            AND sample_epoch IN (?)
+            ORDER BY sample_epoch DESC
+        '''
+        cur.execute(query, (watch_group, epochs_str))
+    else:
+        query = '''
+            SELECT * FROM samples
+            WHERE watch_group = ?
+            AND file_path = ?
+            AND sample_epoch IN (?)
+            ORDER BY sample_epoch DESC
+        '''
+        cur.execute(query, (watch_group, file_path, epochs_str))
+
+    # # Debugging: Print the query and parameters
+    # print("SQL Query:", query)
+    # print("Query Params:", (watch_group, epochs))
+
+    rows = cur.fetchall()
+    conn.close()
+    if rows:
+        samples = {}
+        for row in rows:
+            metrics = {}
+            metrics['size'] = row['size']
+            metrics['user_id'] = row['user_id']
+            metrics['group_id'] = row['group_id']
+            metrics['mode'] = row['mode']
+            metrics['last_modified'] = row['last_modified']
+            metrics['creation_time'] = row['creation_time']
+            metrics['md5'] = row['md5']
+            metrics['sha256'] = row['sha256']
+            metrics['pattern_found'] = row['pattern_found']
+            metrics['sample_epoch'] = row['sample_epoch']
+            samples[row['file_path']] = metrics
+        return samples
+    return None
+
 def has_previous_sample(db_path, watch_group):
     """
     Check if there is any previous sample data for the given watch group.
@@ -160,4 +234,4 @@ def has_previous_sample(db_path, watch_group):
     cur.execute('SELECT COUNT(*) FROM samples WHERE watch_group = ?', (watch_group,))
     count = cur.fetchone()[0]
     conn.close()
-    return count > 0
+    return count > 1

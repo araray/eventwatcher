@@ -78,6 +78,25 @@ def collect_sample(watch_group, log_dir):
 
     return sample, sample_epoch
 
+def compare_samples(sample1, sample2):
+    """
+    Compare two samples and return a list of differences.
+    """
+    differences = []
+    for item in sample1.items():
+        path, metrics = item
+        if path not in sample2:
+            differences.append((path, "new file"))
+        else:
+            for key, value in metrics.items():
+                if key not in sample2[path]:
+                    differences.append((path, f"missing {key}"))
+                elif sample2[path][key] != value:
+                    differences.append((path, f"different {key}"))
+
+    return differences
+
+
 class Monitor:
     def __init__(self, watch_group, db_path, log_dir, log_level="INFO"):
         self.watch_group = watch_group
@@ -103,6 +122,8 @@ class Monitor:
         sample, sample_epoch = collect_sample(self.watch_group, self.log_dir)
         watch_group_name = self.watch_group.get("name", "Unnamed")
 
+        previous_sample = db.get_last_n_samples(self.db_path, self.watch_group.get("name", "Unnamed"))
+
         # Insert per-file records into the samples table.
         for file_path, file_data in sample.items():
             db.insert_sample_record(self.db_path, watch_group_name, sample_epoch, file_path, file_data)
@@ -116,6 +137,18 @@ class Monitor:
             self.logger.info("No previous sample found; skipping rule evaluation for this cycle.")
             self.logger.info("Monitoring cycle completed.")
             return sample, []  # Return an empty list of events.
+
+        # Compare the current sample with the previous one.
+        diff = compare_samples(sample, previous_sample)
+
+        if not diff:
+            self.logger.info("No differences found.")
+            self.logger.info("Monitoring cycle completed.")
+            return sample, []
+
+        # When in DEBUG mode, log the differences.
+        if self.logger.getEffectiveLevel() <= logging.DEBUG:
+            self.logger.debug(f"Differences: {diff}")
 
         now = int(time.time())
         context = {
