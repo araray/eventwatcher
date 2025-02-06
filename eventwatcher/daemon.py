@@ -2,14 +2,36 @@ import logging
 import os
 import threading
 import time
-
 import daemon
 import psutil
 from daemon.pidfile import PIDLockFile
 
 import eventwatcher.config as config_module
 from eventwatcher import logger, monitor
+from eventwatcher.db import remove_old_samples
+from eventwatcher.thread_manager import ThreadManager
+from eventwatcher.utils import spawn_periodic_worker
 
+
+def periodic_cleanup_daemon(db_path, watch_groups, interval=120):
+    """
+    Run a periodic cleanup daemon to remove old records from the database.
+    """
+    wg_tm = ThreadManager()
+    for group in watch_groups:
+        wg_name = group.get('name', 'Unnamed')
+        wg_max_samples = group.get('max_samples', 3)
+        # wg_sample_rate = group.watch_group.get('sample_rate', 60)
+        wg_cleanup_worker = spawn_periodic_worker(
+            remove_old_samples,
+            interval,
+            db_path,
+            wg_name,
+            wg_max_samples
+        )
+        wg_tm.register_thread(wg_cleanup_worker)
+
+    return wg_tm
 
 def log_daemon_status(root_logger, watch_groups):
     """
@@ -141,6 +163,7 @@ def run_daemon(watch_groups, db_path, pid_file, config):
     pidfile_obj = PIDLockFile(pid_file)
     with daemon.DaemonContext(pidfile=pidfile_obj):
         root_logger.info("Daemon started with auto-reload enabled.")
+        wg_tm = periodic_cleanup_daemon(db_path, watch_groups)
         while True:
             run_monitors()
             try:
@@ -153,6 +176,7 @@ def run_daemon(watch_groups, db_path, pid_file, config):
                 root_logger.info("Configuration reloaded. Restarting monitors.")
                 watch_groups = new_watch_groups
                 config = new_config
+                root_logger.info(wg_tm.get_all_statuses())
             except Exception as e:
                 root_logger.error(f"Error reloading configuration: {e}")
                 time.sleep(10)

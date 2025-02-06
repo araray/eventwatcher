@@ -4,7 +4,6 @@ import json
 import os
 import signal
 import sqlite3
-import sys
 import threading
 import time
 
@@ -18,6 +17,7 @@ from eventwatcher import daemon as daemon_module
 from eventwatcher import db, monitor, rule_helpers
 
 DEFAULT_PID_FILENAME = "eventwatcher.pid"
+wg_tm = None
 
 @click.group()
 @click.option("--config", "-c", "config_path", default=None, help="Path to configuration TOML file.")
@@ -104,6 +104,7 @@ def start(ctx, foreground):
     log_dir = get_log_dir(cfg, ctx.obj.get("config_path"))
     pid_file = get_pid_file(log_dir)
     watch_groups_config_path = cfg.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
+
     try:
         watch_groups_data = config.load_watch_groups_configs(watch_groups_config_path)
     except Exception as e:
@@ -111,6 +112,7 @@ def start(ctx, foreground):
         return
 
     watch_groups = watch_groups_data.get("watch_groups", [])
+    wg_tm = daemon_module.periodic_cleanup_daemon(db_path, watch_groups)
 
     if foreground:
         click.echo("Running in foreground...")

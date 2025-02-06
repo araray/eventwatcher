@@ -242,7 +242,10 @@ def remove_old_samples(db_path, watch_group, retain_samples = 1):
     Remove old samples from the samples table for the given watch_group.
     """
     # Get the sample_epoch of the Nth last sample
-    epoch = min(get_last_n_sample_epochs(db_path, watch_group, retain_samples))
+    samples = get_last_n_sample_epochs(db_path, watch_group, retain_samples)
+    if not samples:
+        return
+    epoch = min(samples)
     conn = get_db_connection(db_path)
     cur = conn.cursor()
     cur.execute('''
