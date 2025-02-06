@@ -69,7 +69,7 @@ def init_db(db_path: str):
         )
     """)
 
-    # Create samples table with new fields
+    # Create samples table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -141,15 +141,16 @@ def insert_sample_record(db_path: str, watch_group: str, sample_epoch: int,
     try:
         cur.execute("""
             INSERT INTO samples (
-                watch_group, sample_epoch, file_path, size,
+                watch_group, sample_epoch, file_path, type, size,
                 user_id, group_id, mode, last_modified,
                 creation_time, md5, sha256, pattern_found,
                 is_dir, files_count, subdirs_count
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             watch_group,
             sample_epoch,
             file_path,
+            file_data.get("type"),
             file_data.get("size"),
             file_data.get("user_id"),
             file_data.get("group_id"),

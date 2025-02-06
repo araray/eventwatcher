@@ -95,31 +95,38 @@ def compare_samples(current: dict, previous: dict) -> dict:
     Returns:
         Dict containing differences categorized by type
     """
-    differences = {"new": [], "removed": [], "modified": {}}
+    differences = {
+        'new': [],
+        'removed': [],
+        'modified': {}
+    }
 
     # Find new and modified items
     for path, curr_metrics in current.items():
         if path not in previous:
-            differences["new"].append(path)
+            differences['new'].append(path)
         else:
             prev_metrics = previous[path]
             changes = {}
 
             # Compare all metrics except sample-specific ones
-            skip_fields = {"sample_epoch"}
+            skip_fields = {'sample_epoch'}
             for key, curr_value in curr_metrics.items():
                 if key not in skip_fields:
                     prev_value = prev_metrics.get(key)
                     if curr_value != prev_value:
-                        changes[key] = {"old": prev_value, "new": curr_value}
+                        changes[key] = {
+                            'old': prev_value,
+                            'new': curr_value
+                        }
 
             if changes:
-                differences["modified"][path] = changes
+                differences['modified'][path] = changes
 
     # Find removed items
     for path in previous:
         if path not in current:
-            differences["removed"].append(path)
+            differences['removed'].append(path)
 
     return differences
 
@@ -275,7 +282,6 @@ def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
             # Handle glob patterns
             if any(c in base_path for c in ["*", "?", "["]):
                 import glob
-
                 paths = glob.glob(base_path)
             else:
                 paths = [base_path]
@@ -286,24 +292,24 @@ def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
                         continue
 
                     stat = os.stat(path)
+                    is_directory = os.path.isdir(path)
                     metrics = {
                         "last_modified": stat.st_mtime,
                         "creation_time": stat.st_ctime,
                         "user_id": stat.st_uid,
                         "group_id": stat.st_gid,
                         "mode": stat.st_mode,
-                        "is_dir": os.path.isdir(path),
+                        "is_dir": is_directory,
+                        "type": "directory" if is_directory else "file"
                     }
 
                     if metrics["is_dir"]:
                         dir_metrics = get_dir_metrics(path, timeout_seconds)
-                        metrics.update(
-                            {
-                                "size": dir_metrics.total_size,
-                                "files_count": dir_metrics.files_count,
-                                "subdirs_count": dir_metrics.subdirs_count,
-                            }
-                        )
+                        metrics.update({
+                            "size": dir_metrics.total_size,
+                            "files_count": dir_metrics.files_count,
+                            "subdirs_count": dir_metrics.subdirs_count
+                        })
 
                         if current_depth < watch_group.get("max_depth", 1):
                             try:
@@ -313,16 +319,12 @@ def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
                             except OSError as e:
                                 logging.error(f"Error scanning directory {path}: {e}")
                     else:
-                        metrics.update(
-                            {
-                                "size": stat.st_size,
-                                "md5": compute_file_md5(path),
-                                "sha256": compute_file_sha256(path),
-                                "pattern_found": check_pattern(
-                                    path, watch_group.get("pattern")
-                                ),
-                            }
-                        )
+                        metrics.update({
+                            "size": stat.st_size,
+                            "md5": compute_file_md5(path),
+                            "sha256": compute_file_sha256(path),
+                            "pattern_found": check_pattern(path, watch_group.get("pattern"))
+                        })
 
                     sample[path] = metrics
 
