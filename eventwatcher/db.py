@@ -56,7 +56,10 @@ def init_db(db_path):
             creation_time REAL,
             md5 TEXT,
             sha256 TEXT,
-            pattern_found BOOLEAN
+            pattern_found BOOLEAN,
+            is_dir BOOLEAN,
+            files_count INTEGER,
+            subdirs_count INTEGER
         )
     """
     )
