@@ -25,27 +25,30 @@ def compare_samples(sample1, sample2):
 
     return differences
 
+
 def compute_file_md5(file_path, block_size=65536):
     """Compute MD5 hash of a file."""
     md5 = hashlib.md5()
     try:
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(block_size), b''):
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(block_size), b""):
                 md5.update(chunk)
         return md5.hexdigest()
     except Exception:
         return None
 
+
 def compute_file_sha256(file_path, block_size=65536):
     """Compute SHA256 hash of a file."""
     sha256 = hashlib.sha256()
     try:
-        with open(file_path, 'rb') as f:
-            for chunk in iter(lambda: f.read(block_size), b''):
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(block_size), b""):
                 sha256.update(chunk)
         return sha256.hexdigest()
     except Exception:
         return None
+
 
 def collect_sample(watch_group, log_dir):
     """Collect sample data for the watch group."""
@@ -88,6 +91,7 @@ def collect_sample(watch_group, log_dir):
     for item in watch_items:
         if "*" in item or "?" in item:
             import glob
+
             for path in glob.glob(item):
                 scan_path(path, 1)
         else:
@@ -126,7 +130,7 @@ class Monitor:
             from eventwatcher import logger as event_logger
 
             # Create watch group specific log directory if using subdirectories
-            wg_name = self.watch_group.get('name', 'Unnamed')
+            wg_name = self.watch_group.get("name", "Unnamed")
             print(f"Setting up logger for watch group: {wg_name}")
 
             # Ensure log directory exists
@@ -140,8 +144,8 @@ class Monitor:
             # Test write permissions
             test_file = os.path.join(self.log_dir, ".test_write")
             try:
-                with open(test_file, 'w') as f:
-                    f.write('test')
+                with open(test_file, "w") as f:
+                    f.write("test")
                 os.remove(test_file)
                 print("Successfully tested write permissions")
             except Exception as e:
@@ -153,7 +157,7 @@ class Monitor:
                 self.log_dir,
                 log_filename,
                 level=getattr(logging, self.log_level.upper(), logging.INFO),
-                console=True  # Enable console output for debugging
+                console=True,  # Enable console output for debugging
             )
 
             # Log initial setup
@@ -166,13 +170,18 @@ class Monitor:
         except Exception as e:
             # Print the full error
             import traceback
+
             print(f"Failed to setup monitor logger: {e}")
             print("Full traceback:")
             traceback.print_exc()
 
             # Fallback to basic logging if setup fails
-            basic_logger = logging.getLogger(f"Monitor-{self.watch_group.get('name', 'Unnamed')}")
-            basic_logger.setLevel(getattr(logging, self.log_level.upper(), logging.INFO))
+            basic_logger = logging.getLogger(
+                f"Monitor-{self.watch_group.get('name', 'Unnamed')}"
+            )
+            basic_logger.setLevel(
+                getattr(logging, self.log_level.upper(), logging.INFO)
+            )
             return basic_logger
 
     def run_once(self):
@@ -193,7 +202,7 @@ class Monitor:
                         watch_group_name,
                         sample_epoch,
                         file_path,
-                        file_data
+                        file_data,
                     )
                 except Exception as e:
                     self.logger.error(f"Error inserting sample record: {e}")
@@ -235,10 +244,7 @@ class Monitor:
                     for file_path in affected_files:
                         # Check for duplicate events
                         prev_event = db.get_last_event_for_rule(
-                            self.db_path,
-                            watch_group_name,
-                            rule_name,
-                            file_path
+                            self.db_path, watch_group_name, rule_name, file_path
                         )
 
                         if prev_event:
@@ -246,15 +252,18 @@ class Monitor:
                                 self.db_path,
                                 watch_group_name,
                                 prev_event["sample_epoch"],
-                                file_path
+                                file_path,
                             )
                             current_metrics = sample.get(file_path, {})
 
                             if prev_sample and (
-                                prev_sample.get("md5") == current_metrics.get("md5") and
-                                prev_sample.get("last_modified") == current_metrics.get("last_modified")
+                                prev_sample.get("md5") == current_metrics.get("md5")
+                                and prev_sample.get("last_modified")
+                                == current_metrics.get("last_modified")
                             ):
-                                self.logger.info(f"Skipping duplicate event for {file_path} under rule '{rule_name}'")
+                                self.logger.info(
+                                    f"Skipping duplicate event for {file_path} under rule '{rule_name}'"
+                                )
                                 continue
 
                         # Insert event
@@ -265,25 +274,30 @@ class Monitor:
                             sample_epoch,
                             event_type=event_type,
                             severity=severity,
-                            affected_files=[file_path]
+                            affected_files=[file_path],
                         )
 
-                        triggered_events.append({
-                            "rule": rule_name,
-                            "event_type": event_type,
-                            "severity": severity,
-                            "affected_file": file_path,
-                            "sample_epoch": sample_epoch
-                        })
+                        triggered_events.append(
+                            {
+                                "rule": rule_name,
+                                "event_type": event_type,
+                                "severity": severity,
+                                "affected_file": file_path,
+                                "sample_epoch": sample_epoch,
+                            }
+                        )
 
                 except Exception as e:
-                    self.logger.error(f"Error processing rule {event.get('name', 'unknown')}: {e}")
+                    self.logger.error(
+                        f"Error processing rule {event.get('name', 'unknown')}: {e}"
+                    )
 
             self.logger.info("Monitoring cycle completed.")
             return sample, triggered_events
         except Exception as e:
             print(f"Error in run_once: {e}")
             import traceback
+
             traceback.print_exc()
             raise
 
@@ -292,7 +306,9 @@ class Monitor:
         while not self._stop:
             try:
                 self.run_once()
-                sample_rate = max(self.watch_group.get("sample_rate", 60), 60)  # Minimum 60 seconds
+                sample_rate = max(
+                    self.watch_group.get("sample_rate", 60), 60
+                )  # Minimum 60 seconds
                 time.sleep(sample_rate)
             except Exception as e:
                 self.logger.error(f"Error in monitor run loop: {e}")

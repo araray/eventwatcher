@@ -9,9 +9,11 @@ from eventwatcher.utils import spawn_periodic_worker, spawn_queue_worker
 def say_hello():
     print("Hello every 2 seconds!")
 
+
 # Define a queue processing function.
 def process_item(item):
     print(f"Processing item: {item}")
+
 
 # Create a ThreadManager instance.
 manager = ThreadManager()
@@ -43,4 +45,3 @@ print("All threads stopped.")
 # Clear finished threads from the manager.
 manager.clear_finished()
 print("Final thread registry:", manager.threads)
-

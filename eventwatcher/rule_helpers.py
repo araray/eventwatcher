@@ -23,7 +23,8 @@ def aggregate_metric(data, pattern, metric, func=min):
         return 0
     return func(values)
 
-def get_previous_metric(db_path, watch_group, file_pattern, metric, order='DESC'):
+
+def get_previous_metric(db_path, watch_group, file_pattern, metric, order="DESC"):
     """
     Retrieve the most recent metric value from samples for a given file pattern.
 
@@ -37,13 +38,15 @@ def get_previous_metric(db_path, watch_group, file_pattern, metric, order='DESC'
     Returns:
         The metric value or None if not found.
     """
-    conn = __import__('eventwatcher.db', fromlist=['get_db_connection']).get_db_connection(db_path)
+    conn = __import__(
+        "eventwatcher.db", fromlist=["get_db_connection"]
+    ).get_db_connection(db_path)
     cur = conn.cursor()
-    query = f'''
+    query = f"""
         SELECT {metric} FROM samples
         WHERE watch_group = ? AND file_path LIKE ?
         ORDER BY sample_epoch {order} LIMIT 1
-    '''
+    """
     cur.execute(query, (watch_group, file_pattern))
     row = cur.fetchone()
     conn.close()

@@ -12,6 +12,7 @@ def get_db_connection(db_path):
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def init_db(db_path):
     """
     Initialize the SQLite database with the required tables.
@@ -22,7 +23,8 @@ def init_db(db_path):
     cur = conn.cursor()
 
     # Create events table
-    cur.execute('''
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_uid TEXT NOT NULL,
@@ -35,10 +37,12 @@ def init_db(db_path):
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(event_uid)
         )
-    ''')
+    """
+    )
 
     # Create samples table
-    cur.execute('''
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             watch_group TEXT NOT NULL,
@@ -54,33 +58,46 @@ def init_db(db_path):
             sha256 TEXT,
             pattern_found BOOLEAN
         )
-    ''')
+    """
+    )
 
     conn.commit()
     conn.close()
 
-def insert_event(db_path, watch_group, event, sample_epoch,
-                 event_type=None, severity=None, affected_files=None):
+
+def insert_event(
+    db_path,
+    watch_group,
+    event,
+    sample_epoch,
+    event_type=None,
+    severity=None,
+    affected_files=None,
+):
     """
     Insert an event record into the events table.
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
     event_uid = str(uuid.uuid4())
-    cur.execute('''
+    cur.execute(
+        """
         INSERT INTO events (event_uid, watch_group, event, event_type, severity, affected_files, sample_epoch)
         VALUES (?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        event_uid,
-        watch_group,
-        event,
-        event_type,
-        severity,
-        json.dumps(affected_files),
-        sample_epoch
-    ))
+    """,
+        (
+            event_uid,
+            watch_group,
+            event,
+            event_type,
+            severity,
+            json.dumps(affected_files),
+            sample_epoch,
+        ),
+    )
     conn.commit()
     conn.close()
+
 
 def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_data):
     """
@@ -88,28 +105,32 @@ def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_dat
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    cur.execute('''
+    cur.execute(
+        """
         INSERT INTO samples (
             watch_group, sample_epoch, file_path, size,
             user_id, group_id, mode, last_modified,
             creation_time, md5, sha256, pattern_found
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (
-        watch_group,
-        sample_epoch,
-        file_path,
-        file_data.get("size"),
-        file_data.get("user_id"),
-        file_data.get("group_id"),
-        file_data.get("mode"),
-        file_data.get("last_modified"),
-        file_data.get("creation_time"),
-        file_data.get("md5"),
-        file_data.get("sha256"),
-        file_data.get("pattern_found")
-    ))
+    """,
+        (
+            watch_group,
+            sample_epoch,
+            file_path,
+            file_data.get("size"),
+            file_data.get("user_id"),
+            file_data.get("group_id"),
+            file_data.get("mode"),
+            file_data.get("last_modified"),
+            file_data.get("creation_time"),
+            file_data.get("md5"),
+            file_data.get("sha256"),
+            file_data.get("pattern_found"),
+        ),
+    )
     conn.commit()
     conn.close()
+
 
 def get_last_event_for_rule(db_path, watch_group, rule_name, file_path):
     """
@@ -118,19 +139,20 @@ def get_last_event_for_rule(db_path, watch_group, rule_name, file_path):
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    query = '''
+    query = """
         SELECT * FROM events
         WHERE watch_group = ? AND event = ?
         ORDER BY sample_epoch DESC LIMIT 1
-    '''
+    """
     cur.execute(query, (watch_group, rule_name))
     row = cur.fetchone()
     conn.close()
     if row:
-        affected_files = json.loads(row['affected_files'])
+        affected_files = json.loads(row["affected_files"])
         if file_path in affected_files:
             return dict(row)
     return None
+
 
 def get_sample_record(db_path, watch_group, sample_epoch, file_path):
     """
@@ -139,11 +161,11 @@ def get_sample_record(db_path, watch_group, sample_epoch, file_path):
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    query = '''
+    query = """
         SELECT * FROM samples
         WHERE watch_group = ? AND sample_epoch = ? AND file_path = ?
         LIMIT 1
-    '''
+    """
     cur.execute(query, (watch_group, sample_epoch, file_path))
     row = cur.fetchone()
     conn.close()
@@ -151,25 +173,27 @@ def get_sample_record(db_path, watch_group, sample_epoch, file_path):
         return dict(row)
     return None
 
-def get_last_n_sample_epochs(db_path, watch_group, n_samples = 1):
+
+def get_last_n_sample_epochs(db_path, watch_group, n_samples=1):
     """
     Retrieve the last N sample epochs for a given watch_group.
     Returns a list of sample_epoch values.
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    query = '''
+    query = """
         SELECT DISTINCT sample_epoch FROM samples
         WHERE watch_group = ?
         ORDER BY sample_epoch DESC
         LIMIT ?
-    '''
+    """
     cur.execute(query, (watch_group, n_samples))
     rows = cur.fetchall()
     conn.close()
-    return [row['sample_epoch'] for row in rows]
+    return [row["sample_epoch"] for row in rows]
 
-def get_last_n_samples(db_path, watch_group, file_path = None, n_samples = 1):
+
+def get_last_n_samples(db_path, watch_group, file_path=None, n_samples=1):
     """
     Retrieve the sample record for a given watch_group, sample_epoch, and file_path.
     Returns a dict with sample data or None if not found.
@@ -181,24 +205,24 @@ def get_last_n_samples(db_path, watch_group, file_path = None, n_samples = 1):
     if not epochs:
         return []
 
-    epochs_str = ', '.join(map(str, epochs))
+    epochs_str = ", ".join(map(str, epochs))
 
     if file_path is None:
-        query = '''
+        query = """
             SELECT * FROM samples
             WHERE watch_group = ?
             AND sample_epoch IN (?)
             ORDER BY sample_epoch DESC
-        '''
+        """
         cur.execute(query, (watch_group, epochs_str))
     else:
-        query = '''
+        query = """
             SELECT * FROM samples
             WHERE watch_group = ?
             AND file_path = ?
             AND sample_epoch IN (?)
             ORDER BY sample_epoch DESC
-        '''
+        """
         cur.execute(query, (watch_group, file_path, epochs_str))
 
     # # Debugging: Print the query and parameters
@@ -211,19 +235,20 @@ def get_last_n_samples(db_path, watch_group, file_path = None, n_samples = 1):
         samples = {}
         for row in rows:
             metrics = {}
-            metrics['size'] = row['size']
-            metrics['user_id'] = row['user_id']
-            metrics['group_id'] = row['group_id']
-            metrics['mode'] = row['mode']
-            metrics['last_modified'] = row['last_modified']
-            metrics['creation_time'] = row['creation_time']
-            metrics['md5'] = row['md5']
-            metrics['sha256'] = row['sha256']
-            metrics['pattern_found'] = row['pattern_found']
-            metrics['sample_epoch'] = row['sample_epoch']
-            samples[row['file_path']] = metrics
+            metrics["size"] = row["size"]
+            metrics["user_id"] = row["user_id"]
+            metrics["group_id"] = row["group_id"]
+            metrics["mode"] = row["mode"]
+            metrics["last_modified"] = row["last_modified"]
+            metrics["creation_time"] = row["creation_time"]
+            metrics["md5"] = row["md5"]
+            metrics["sha256"] = row["sha256"]
+            metrics["pattern_found"] = row["pattern_found"]
+            metrics["sample_epoch"] = row["sample_epoch"]
+            samples[row["file_path"]] = metrics
         return samples
     return None
+
 
 def has_previous_sample(db_path, watch_group):
     """
@@ -232,12 +257,13 @@ def has_previous_sample(db_path, watch_group):
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM samples WHERE watch_group = ?', (watch_group,))
+    cur.execute("SELECT COUNT(*) FROM samples WHERE watch_group = ?", (watch_group,))
     count = cur.fetchone()[0]
     conn.close()
     return count > 1
 
-def remove_old_samples(db_path, watch_group, retain_samples = 1):
+
+def remove_old_samples(db_path, watch_group, retain_samples=1):
     """
     Remove old samples from the samples table for the given watch_group.
     """
@@ -248,12 +274,16 @@ def remove_old_samples(db_path, watch_group, retain_samples = 1):
     epoch = min(samples)
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    cur.execute('''
+    cur.execute(
+        """
         DELETE FROM samples
         WHERE watch_group = ? AND sample_epoch < ?
-    ''', (watch_group, epoch))
+    """,
+        (watch_group, epoch),
+    )
     conn.commit()
     conn.close()
+
 
 def count_samples(db_path, watch_group):
     """
@@ -261,10 +291,11 @@ def count_samples(db_path, watch_group):
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    cur.execute('SELECT COUNT(*) FROM samples WHERE watch_group = ?', (watch_group,))
+    cur.execute("SELECT COUNT(*) FROM samples WHERE watch_group = ?", (watch_group,))
     count = cur.fetchone()[0]
     conn.close()
     return count
+
 
 def count_sample_epochs(db_path, watch_group):
     """
@@ -272,7 +303,10 @@ def count_sample_epochs(db_path, watch_group):
     """
     conn = get_db_connection(db_path)
     cur = conn.cursor()
-    cur.execute('SELECT COUNT(DISTINCT sample_epoch) FROM samples WHERE watch_group = ?', (watch_group,))
+    cur.execute(
+        "SELECT COUNT(DISTINCT sample_epoch) FROM samples WHERE watch_group = ?",
+        (watch_group,),
+    )
     count = cur.fetchone()[0]
     conn.close()
     return count

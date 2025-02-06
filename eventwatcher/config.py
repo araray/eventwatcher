@@ -6,6 +6,7 @@ import yaml
 DEFAULT_CONFIG_PATH = "./config.toml"
 ENV_CONFIG_DIR_VAR = "EVENTWATCHER_CONFIG_DIR"
 
+
 def load_config(cli_config_path=None):
     """
     Load configuration from a TOML file.
@@ -34,6 +35,7 @@ def load_config(cli_config_path=None):
 
     return config_data
 
+
 def load_watch_groups_config(watch_groups_path):
     """
     Load watch groups configuration from a YAML file.
@@ -45,10 +47,13 @@ def load_watch_groups_config(watch_groups_path):
         dict: Watch groups configuration.
     """
     if not os.path.exists(watch_groups_path):
-        raise FileNotFoundError(f"Watch groups configuration file not found: {watch_groups_path}")
+        raise FileNotFoundError(
+            f"Watch groups configuration file not found: {watch_groups_path}"
+        )
     with open(watch_groups_path, "r") as f:
         groups_config = yaml.safe_load(f)
     return groups_config
+
 
 def load_watch_groups_configs(path):
     """
@@ -64,7 +69,7 @@ def load_watch_groups_configs(path):
     if os.path.isdir(path):
         aggregated = {"watch_groups": []}
         for filename in os.listdir(path):
-            if filename.endswith(('.yaml', '.yml')):
+            if filename.endswith((".yaml", ".yml")):
                 file_path = os.path.join(path, filename)
                 with open(file_path, "r") as f:
                     data = yaml.safe_load(f)

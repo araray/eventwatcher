@@ -8,9 +8,11 @@ from eventwatcher.utils import spawn_periodic_worker, spawn_queue_worker
 def say_hello():
     print("Hello every 2 seconds!")
 
+
 # Define a queue processing function.
 def process_item(item):
     print(f"Processing item: {item}")
+
 
 # Start a periodic worker.
 periodic_worker = spawn_periodic_worker(say_hello, interval=2)
@@ -34,4 +36,3 @@ queue_worker.stop()
 # Join threads if necessary.
 periodic_worker.join()
 queue_worker.join()
-

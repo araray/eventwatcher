@@ -27,7 +27,9 @@ class TestThreadFactory(unittest.TestCase):
         worker.stop()
         worker.join(timeout=1)
         # Expect at least 3 executions in 2 seconds.
-        self.assertGreaterEqual(call_counter[0], 3, "Periodic worker did not execute enough times")
+        self.assertGreaterEqual(
+            call_counter[0], 3, "Periodic worker did not execute enough times"
+        )
 
     def test_queue_worker(self):
         """
@@ -49,8 +51,12 @@ class TestThreadFactory(unittest.TestCase):
         # Stop the worker and wait for it to finish.
         worker.stop()
         worker.join(timeout=1)
-        self.assertEqual(processed_items, list(range(5)), "Queue worker did not process items correctly")
+        self.assertEqual(
+            processed_items,
+            list(range(5)),
+            "Queue worker did not process items correctly",
+        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()
-

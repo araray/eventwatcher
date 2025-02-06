@@ -13,7 +13,9 @@ import threading
 from queue import Empty
 
 # Configure logging for debug output
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 
 class PeriodicWorker(threading.Thread):
@@ -37,7 +39,9 @@ class PeriodicWorker(threading.Thread):
         self.args = args
         self.kwargs = kwargs
         self.stop_event = threading.Event()
-        self.daemon = True  # Runs as a daemon thread so it will exit when the main program exits.
+        self.daemon = (
+            True  # Runs as a daemon thread so it will exit when the main program exits.
+        )
 
     def run(self):
         """
@@ -93,7 +97,9 @@ class QueueWorker(threading.Thread):
         """
         Continuously poll the queue for new items and process them.
         """
-        logging.debug("QueueWorker started with poll interval: %s seconds", self.poll_interval)
+        logging.debug(
+            "QueueWorker started with poll interval: %s seconds", self.poll_interval
+        )
         while not self.stop_event.is_set():
             try:
                 # Attempt to retrieve an item from the queue; wait for poll_interval seconds.

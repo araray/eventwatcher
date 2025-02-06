@@ -13,11 +13,7 @@ setup(
         "python-daemon",
         "rich",
         "tabulate",
-        "psutil"
+        "psutil",
     ],
-    entry_points={
-        "console_scripts": [
-            "eventwatcher=eventwatcher.cli:main"
-        ]
-    },
+    entry_points={"console_scripts": ["eventwatcher=eventwatcher.cli:main"]},
 )

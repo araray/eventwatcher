@@ -1,6 +1,7 @@
 """
 Unit tests for the ThreadManager class in thread_manager.py.
 """
+
 import time
 import unittest
 
@@ -12,6 +13,7 @@ class DummyWorker:
     """
     A dummy worker function that increments a counter.
     """
+
     def __init__(self):
         self.counter = 0
 
@@ -19,6 +21,7 @@ class DummyWorker:
         self.counter += 1
         # Sleep briefly to simulate work
         time.sleep(0.1)
+
 
 class TestThreadManager(unittest.TestCase):
     def test_register_and_get_status(self):
@@ -32,14 +35,18 @@ class TestThreadManager(unittest.TestCase):
 
         # Check status immediately after registration.
         status = manager.get_status(worker)
-        self.assertEqual(status['name'], worker.name)
-        self.assertTrue(status['is_alive'], "Worker should be alive immediately after start.")
+        self.assertEqual(status["name"], worker.name)
+        self.assertTrue(
+            status["is_alive"], "Worker should be alive immediately after start."
+        )
 
         # Stop the worker and wait for it to finish.
         worker.stop()
         worker.join(timeout=1)
         status = manager.get_status(worker)
-        self.assertFalse(status['is_alive'], "Worker should not be alive after stopping.")
+        self.assertFalse(
+            status["is_alive"], "Worker should not be alive after stopping."
+        )
         manager.unregister_thread(worker)
 
     def test_stop_and_join_all(self):
@@ -59,13 +66,13 @@ class TestThreadManager(unittest.TestCase):
         # Allow the threads to run for a short time.
         time.sleep(1)
         statuses_before = manager.get_all_statuses()
-        self.assertTrue(statuses_before[worker1.name]['is_alive'])
-        self.assertTrue(statuses_before[worker2.name]['is_alive'])
+        self.assertTrue(statuses_before[worker1.name]["is_alive"])
+        self.assertTrue(statuses_before[worker2.name]["is_alive"])
 
         manager.stop_and_join_all(timeout=1)
         statuses_after = manager.get_all_statuses()
-        self.assertFalse(statuses_after[worker1.name]['is_alive'])
-        self.assertFalse(statuses_after[worker2.name]['is_alive'])
+        self.assertFalse(statuses_after[worker1.name]["is_alive"])
+        self.assertFalse(statuses_after[worker2.name]["is_alive"])
 
     def test_clear_finished(self):
         """
@@ -82,5 +89,6 @@ class TestThreadManager(unittest.TestCase):
         manager.clear_finished()
         self.assertEqual(len(manager.threads), 0, "Finished threads should be cleared.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

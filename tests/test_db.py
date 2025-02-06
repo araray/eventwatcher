@@ -14,6 +14,7 @@ def temp_db(tmp_path):
     db.init_db(str(db_path))
     return str(db_path)
 
+
 def test_db_init_and_insert(temp_db):
     # Insert a sample event and sample record, then verify their existence.
     db.insert_event(temp_db, "TestGroup", "TestEvent", {"key": "value"})

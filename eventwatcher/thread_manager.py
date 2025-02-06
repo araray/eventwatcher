@@ -19,7 +19,9 @@ import logging
 import threading
 
 # Configure logging for debug output
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 
 class ThreadManager:
@@ -75,10 +77,10 @@ class ThreadManager:
                 - id (int): Thread identifier
         """
         return {
-            'name': str(thread.name),
-            'is_alive': bool(thread.is_alive()),
-            'daemon': bool(thread.daemon),
-            'id': thread.ident
+            "name": str(thread.name),
+            "is_alive": bool(thread.is_alive()),
+            "daemon": bool(thread.daemon),
+            "id": thread.ident,
         }
 
     def get_all_statuses(self):
@@ -97,7 +99,7 @@ class ThreadManager:
         Threads that do not implement a stop() method will be skipped with a warning.
         """
         for thread in self.threads:
-            if hasattr(thread, 'stop') and callable(thread.stop):
+            if hasattr(thread, "stop") and callable(thread.stop):
                 logging.debug("Stopping thread: %s", thread.name)
                 thread.stop()
             else:
@@ -130,5 +132,8 @@ class ThreadManager:
         """
         initial_count = len(self.threads)
         self.threads = [thread for thread in self.threads if thread.is_alive()]
-        logging.debug("Cleared finished threads. %d removed, %d remaining.",
-                      initial_count - len(self.threads), len(self.threads))
+        logging.debug(
+            "Cleared finished threads. %d removed, %d remaining.",
+            initial_count - len(self.threads),
+            len(self.threads),
+        )
