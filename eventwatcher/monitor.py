@@ -5,8 +5,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple, Set
 
 from eventwatcher import db, rule_helpers
 
@@ -14,20 +13,25 @@ from eventwatcher import db, rule_helpers
 @dataclass
 class DirectoryMetrics:
     """Container for directory metrics with timeout handling."""
-
     total_size: int = -1
     files_count: int = -1
     subdirs_count: int = -1
     timed_out: bool = False
+    children: Set[str] = None
+
+    def __post_init__(self):
+        if self.children is None:
+            self.children = set()
 
 
-def get_dir_metrics(path: str, timeout_seconds: float) -> DirectoryMetrics:
+def get_dir_metrics(path: str, timeout_seconds: float, explode: bool = False) -> DirectoryMetrics:
     """
     Calculate directory metrics with timeout handling.
 
     Args:
         path: Directory path to analyze
         timeout_seconds: Maximum time to spend analyzing
+        explode: Whether to collect child paths for directory explosion
 
     Returns:
         DirectoryMetrics object with collected metrics
@@ -36,12 +40,14 @@ def get_dir_metrics(path: str, timeout_seconds: float) -> DirectoryMetrics:
 
     try:
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            future = executor.submit(_collect_dir_metrics, path)
+            future = executor.submit(_collect_dir_metrics, path, explode)
             result = future.result(timeout=timeout_seconds)
             if result:
                 metrics.total_size = result[0]
                 metrics.files_count = result[1]
                 metrics.subdirs_count = result[2]
+                if explode and len(result) > 3:
+                    metrics.children = result[3]
     except concurrent.futures.TimeoutError:
         logging.warning(f"Directory metrics collection timed out for {path}")
         metrics.timed_out = True
@@ -51,18 +57,22 @@ def get_dir_metrics(path: str, timeout_seconds: float) -> DirectoryMetrics:
     return metrics
 
 
-def _collect_dir_metrics(path: str) -> Optional[Tuple[int, int, int]]:
+def _collect_dir_metrics(path: str, collect_children: bool = False) -> Optional[tuple]:
     """
     Helper function to collect directory metrics.
-    Returns (total_size, files_count, subdirs_count) or None on error.
+    Returns (total_size, files_count, subdirs_count, children_paths) or None on error.
     """
     try:
         total_size = 0
         files_count = 0
         subdirs_count = 0
+        children = set() if collect_children else None
 
         for entry in os.scandir(path):
             try:
+                if collect_children:
+                    children.add(entry.path)
+
                 if entry.is_file(follow_symlinks=False):
                     files_count += 1
                     total_size += entry.stat().st_size
@@ -78,6 +88,8 @@ def _collect_dir_metrics(path: str) -> Optional[Tuple[int, int, int]]:
                 logging.warning(f"Error accessing {entry.path}: {e}")
                 continue
 
+        if collect_children:
+            return total_size, files_count, subdirs_count, children
         return total_size, files_count, subdirs_count
     except Exception as e:
         logging.error(f"Error in _collect_dir_metrics for {path}: {e}")
@@ -260,7 +272,8 @@ def compute_file_sha256(file_path, block_size=65536):
 
 def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
     """
-    Collect sample data for the watch group with improved directory handling.
+    Collect sample data for the watch group with improved directory handling
+    and directory explosion support.
 
     Args:
         watch_group: Watch group configuration
@@ -272,10 +285,12 @@ def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
     sample = {}
     sample_epoch = int(time.time())
 
-    # Get timeout configuration
+    # Get configuration
     sample_rate = watch_group.get("sample_rate", 60)
     timeout_fraction = watch_group.get("dir_scan_timeout_fraction", 0.5)
     timeout_seconds = max(1, sample_rate * timeout_fraction)
+    max_depth = watch_group.get("max_depth", 1)
+    explode_dirs = watch_group.get("explode_directories", False)
 
     def scan_path(base_path: str, current_depth: int) -> None:
         try:
@@ -293,40 +308,43 @@ def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
 
                     stat = os.stat(path)
                     is_directory = os.path.isdir(path)
+
+                    # Base metrics for both files and directories
                     metrics = {
+                        "type": "directory" if is_directory else "file",
                         "last_modified": stat.st_mtime,
                         "creation_time": stat.st_ctime,
                         "user_id": stat.st_uid,
                         "group_id": stat.st_gid,
                         "mode": stat.st_mode,
-                        "is_dir": is_directory,
-                        "type": "directory" if is_directory else "file"
+                        "is_dir": is_directory
                     }
 
-                    if metrics["is_dir"]:
-                        dir_metrics = get_dir_metrics(path, timeout_seconds)
+                    if is_directory:
+                        # Collect directory metrics with explosion if configured
+                        dir_metrics = get_dir_metrics(path, timeout_seconds, explode_dirs)
                         metrics.update({
                             "size": dir_metrics.total_size,
                             "files_count": dir_metrics.files_count,
                             "subdirs_count": dir_metrics.subdirs_count
                         })
 
-                        if current_depth < watch_group.get("max_depth", 1):
-                            try:
-                                for entry in os.scandir(path):
-                                    if entry.is_dir(follow_symlinks=False):
-                                        scan_path(entry.path, current_depth + 1)
-                            except OSError as e:
-                                logging.error(f"Error scanning directory {path}: {e}")
+                        # Add the directory entry to samples
+                        sample[path] = metrics
+
+                        # Handle directory explosion
+                        if explode_dirs and dir_metrics.children and current_depth < max_depth:
+                            for child_path in dir_metrics.children:
+                                scan_path(child_path, current_depth + 1)
                     else:
+                        # File-specific metrics
                         metrics.update({
                             "size": stat.st_size,
                             "md5": compute_file_md5(path),
                             "sha256": compute_file_sha256(path),
                             "pattern_found": check_pattern(path, watch_group.get("pattern"))
                         })
-
-                    sample[path] = metrics
+                        sample[path] = metrics
 
                 except OSError as e:
                     logging.error(f"Error accessing path {path}: {e}")
