@@ -225,10 +225,6 @@ def get_last_n_samples(db_path, watch_group, file_path=None, n_samples=1):
         """
         cur.execute(query, (watch_group, file_path, epochs_str))
 
-    # # Debugging: Print the query and parameters
-    # print("SQL Query:", query)
-    # print("Query Params:", (watch_group, epochs))
-
     rows = cur.fetchall()
     conn.close()
     if rows:
