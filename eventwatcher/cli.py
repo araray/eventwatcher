@@ -1,26 +1,33 @@
+import csv
+import io
+import json
 import os
 import signal
-import time
-import threading
-import json
-import click
 import sqlite3
-from eventwatcher import config
-from eventwatcher import db
-from eventwatcher import monitor
-from eventwatcher import daemon as daemon_module
-from eventwatcher import rule_helpers
+import threading
+import time
+
+import click
 import psutil
 from rich.console import Console
 from rich.table import Table
-import csv
-import io
-import sys
+
+from eventwatcher import config
+from eventwatcher import daemon as daemon_module
+from eventwatcher import db, monitor, rule_helpers
 
 DEFAULT_PID_FILENAME = "eventwatcher.pid"
+wg_tm = None
+
 
 @click.group()
-@click.option("--config", "-c", "config_path", default=None, help="Path to configuration TOML file.")
+@click.option(
+    "--config",
+    "-c",
+    "config_path",
+    default=None,
+    help="Path to configuration TOML file.",
+)
 @click.option("--debug", is_flag=True, help="Enable debug logging.")
 @click.pass_context
 def main(ctx, config_path, debug):
@@ -37,12 +44,15 @@ def main(ctx, config_path, debug):
         ctx.abort()
     ctx.obj = {"config": cfg, "config_path": config_path, "debug": debug}
 
+
 def get_log_dir(cfg, config_path):
     config_dir = os.path.dirname(cfg.get("config_path", config_path) or "./config.toml")
     return os.path.join(config_dir, cfg.get("logging", {}).get("log_dir", "logs"))
 
+
 def get_pid_file(log_dir):
     return os.path.join(log_dir, DEFAULT_PID_FILENAME)
+
 
 @main.command()
 @click.pass_context
@@ -53,6 +63,7 @@ def show_config(ctx):
     cfg = ctx.obj.get("config")
     click.echo(cfg)
 
+
 @main.command()
 @click.pass_context
 def init_db(ctx):
@@ -61,9 +72,12 @@ def init_db(ctx):
     """
     cfg = ctx.obj.get("config")
     config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
-    db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
+    db_path = os.path.join(
+        config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db")
+    )
     db.init_db(db_path)
     click.echo(f"Database initialized at {db_path}")
+
 
 @main.command()
 @click.pass_context
@@ -73,9 +87,13 @@ def monitor_once(ctx):
     """
     cfg = ctx.obj.get("config")
     config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
-    db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
+    db_path = os.path.join(
+        config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db")
+    )
     log_dir = get_log_dir(cfg, ctx.obj.get("config_path"))
-    watch_groups_config_path = cfg.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
+    watch_groups_config_path = cfg.get("watch_groups", {}).get(
+        "configs_dir", "watch_groups.yaml"
+    )
     try:
         watch_groups = config.load_watch_groups_configs(watch_groups_config_path)
     except Exception as e:
@@ -83,13 +101,21 @@ def monitor_once(ctx):
         return
 
     for group in watch_groups.get("watch_groups", []):
-        m = monitor.Monitor(group, db_path, log_dir, log_level=cfg.get("logging", {}).get("level", "INFO"))
+        m = monitor.Monitor(
+            group,
+            db_path,
+            log_dir,
+            log_level=cfg.get("logging", {}).get("level", "INFO"),
+        )
         sample, events = m.run_once()
-        click.echo(f"Group '{group.get('name', 'Unnamed')}' sample: {json.dumps(sample, indent=2)}")
+        click.echo(
+            f"Group '{group.get('name', 'Unnamed')}' sample: {json.dumps(sample, indent=2)}"
+        )
         if events:
             click.echo(f"Triggered events: {json.dumps(events, indent=2)}")
         else:
             click.echo("No events triggered.")
+
 
 @main.command()
 @click.option("--foreground", is_flag=True, help="Run in foreground (not as daemon).")
@@ -99,11 +125,27 @@ def start(ctx, foreground):
     Start the EventWatcher service.
     """
     cfg = ctx.obj.get("config")
-    config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
-    db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
-    log_dir = get_log_dir(cfg, ctx.obj.get("config_path"))
+    config_path = ctx.obj.get("config_path")
+
+    if not config_path:
+        # If no config path was provided, use the default
+        config_path = "./config.toml"
+        if not os.path.exists(config_path):
+            click.echo(
+                "No config file found. Please specify one with --config or create config.toml in current directory."
+            )
+            ctx.exit(1)
+
+    config_dir = os.path.dirname(os.path.abspath(config_path))
+    db_path = os.path.join(
+        config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db")
+    )
+    log_dir = get_log_dir(cfg, config_path)
     pid_file = get_pid_file(log_dir)
-    watch_groups_config_path = cfg.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
+    watch_groups_config_path = cfg.get("watch_groups", {}).get(
+        "configs_dir", "watch_groups.yaml"
+    )
+
     try:
         watch_groups_data = config.load_watch_groups_configs(watch_groups_config_path)
     except Exception as e:
@@ -117,7 +159,12 @@ def start(ctx, foreground):
         monitors = []
         threads = []
         for group in watch_groups:
-            m = monitor.Monitor(group, db_path, log_dir, log_level=cfg.get("logging", {}).get("level", "INFO"))
+            m = monitor.Monitor(
+                group,
+                db_path,
+                os.path.abspath(log_dir),  # Ensure absolute path
+                log_level=cfg.get("logging", {}).get("level", "INFO"),
+            )
             monitors.append(m)
             t = threading.Thread(target=m.run)
             t.daemon = True
@@ -131,7 +178,15 @@ def start(ctx, foreground):
                 m.stop()
     else:
         click.echo("Starting daemon...")
-        daemon_module.run_daemon(watch_groups, db_path, pid_file=pid_file, config=cfg)
+        # Pass the absolute config path to run_daemon
+        daemon_module.run_daemon(
+            watch_groups=watch_groups,
+            db_path=db_path,
+            pid_file=pid_file,
+            config=cfg,
+            config_path=os.path.abspath(config_path),  # Pass absolute config path
+        )
+
 
 @main.command()
 @click.pass_context
@@ -145,7 +200,7 @@ def stop(ctx):
     if not os.path.exists(pid_file):
         click.echo("Daemon is not running (pid file not found).")
         return
-    with open(pid_file, 'r') as f:
+    with open(pid_file, "r") as f:
         pid = int(f.read().strip())
     try:
         os.kill(pid, signal.SIGTERM)
@@ -155,6 +210,7 @@ def stop(ctx):
             os.remove(pid_file)
     except Exception as e:
         click.echo(f"Error stopping daemon: {e}")
+
 
 @main.command()
 @click.pass_context
@@ -173,7 +229,7 @@ def status(ctx):
         click.echo("Daemon is not running (pid file not found).")
         return
 
-    with open(pid_file, 'r') as f:
+    with open(pid_file, "r") as f:
         pid = int(f.read().strip())
     try:
         proc = psutil.Process(pid)
@@ -189,10 +245,15 @@ def status(ctx):
     status_table.add_row("Memory %", f"{proc.memory_percent():.2f}")
     status_table.add_row("Memory RSS", str(proc.memory_info().rss))
     status_table.add_row("Threads", str(proc.num_threads()))
-    status_table.add_row("Start Time", time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(proc.create_time())))
+    status_table.add_row(
+        "Start Time",
+        time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(proc.create_time())),
+    )
 
     # For watch groups info, load the watch groups configuration.
-    watch_groups_config_path = cfg.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
+    watch_groups_config_path = cfg.get("watch_groups", {}).get(
+        "configs_dir", "watch_groups.yaml"
+    )
     try:
         watch_groups_data = config.load_watch_groups_configs(watch_groups_config_path)
         groups = watch_groups_data.get("watch_groups", [])
@@ -204,9 +265,17 @@ def status(ctx):
 
     console.print(status_table)
 
+
 @main.command(name="show-events")
 @click.option("--watch-group", "-w", default=None, help="Filter by watch group name.")
-@click.option("--format", "-f", "out_format", default="tabulate", type=click.Choice(["tabulate", "json", "csv", "raw"], case_sensitive=False), help="Output format.")
+@click.option(
+    "--format",
+    "-f",
+    "out_format",
+    default="tabulate",
+    type=click.Choice(["tabulate", "json", "csv", "raw"], case_sensitive=False),
+    help="Output format.",
+)
 @click.pass_context
 def show_events(ctx, watch_group, out_format):
     """
@@ -214,7 +283,9 @@ def show_events(ctx, watch_group, out_format):
     """
     cfg = ctx.obj.get("config")
     config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
-    db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
+    db_path = os.path.join(
+        config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db")
+    )
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     if watch_group:
@@ -251,6 +322,7 @@ def show_events(ctx, watch_group, out_format):
         else:
             click.echo("No events found.")
 
+
 @main.command()
 @click.argument("sql_query", nargs=-1)
 @click.pass_context
@@ -262,7 +334,9 @@ def query(ctx, sql_query):
     """
     cfg = ctx.obj.get("config")
     config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
-    db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
+    db_path = os.path.join(
+        config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db")
+    )
     query_str = " ".join(sql_query)
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -284,6 +358,7 @@ def query(ctx, sql_query):
     finally:
         conn.close()
 
+
 @main.command()
 @click.pass_context
 def info(ctx):
@@ -292,7 +367,9 @@ def info(ctx):
     """
     cfg = ctx.obj.get("config")
     config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
-    db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
+    db_path = os.path.join(
+        config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db")
+    )
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
     cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
@@ -327,6 +404,7 @@ def info(ctx):
     }
     for func_name in available_funcs:
         console.print(f" - {func_name}")
+
 
 if __name__ == "__main__":
     main()

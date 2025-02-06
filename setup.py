@@ -1,8 +1,8 @@
-from setuptools import setup, find_packages
+from setuptools import find_packages, setup
 
 setup(
     name="eventwatcher",
-    version="0.2.0",
+    version="0.3.0",
     description="A file/directory event monitoring tool with daemon support",
     author="Araray Velho",
     packages=find_packages(),
@@ -13,11 +13,7 @@ setup(
         "python-daemon",
         "rich",
         "tabulate",
-        "psutil"
+        "psutil",
     ],
-    entry_points={
-        "console_scripts": [
-            "eventwatcher=eventwatcher.cli:main"
-        ]
-    },
+    entry_points={"console_scripts": ["eventwatcher=eventwatcher.cli:main"]},
 )

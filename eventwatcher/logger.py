@@ -1,6 +1,7 @@
 import logging
 import os
 
+
 def setup_logger(name, log_dir, log_filename, level=logging.INFO, console=True):
     """
     Set up and return a logger with file and (optionally) console handlers.
@@ -24,7 +25,9 @@ def setup_logger(name, log_dir, log_filename, level=logging.INFO, console=True):
     # Clear out any existing handlers.
     logger.handlers = []
 
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
 
     # File handler with the specified level.
     file_handler = logging.FileHandler(os.path.join(log_dir, log_filename))

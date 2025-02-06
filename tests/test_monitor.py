@@ -1,14 +1,18 @@
 import os
 import tempfile
-import pytest
-from eventwatcher import monitor
 import time
+
+import pytest
+
+from eventwatcher import monitor
+
 
 def create_temp_file(tmp_path, content="Hello World"):
     file_path = tmp_path / "test.txt"
     with open(file_path, "w") as f:
         f.write(content)
     return str(file_path)
+
 
 @pytest.fixture
 def temp_watch_group(tmp_path):
@@ -25,10 +29,13 @@ def temp_watch_group(tmp_path):
         "rules": [
             {
                 "name": "PatternFound",
-                "condition": "data.get('" + file_path + "', {}).get('pattern_found', False)"
+                "condition": "data.get('"
+                + file_path
+                + "', {}).get('pattern_found', False)",
             }
-        ]
+        ],
     }
+
 
 def test_collect_sample(tmp_path):
     # Test collecting sample for a file.
@@ -40,10 +47,12 @@ def test_collect_sample(tmp_path):
     # Check if the pattern is found.
     assert sample[file_path].get("pattern_found") == True
 
+
 def test_monitor_run_once(temp_watch_group, tmp_path):
     # Create a temporary database file.
     db_path = str(tmp_path / "test.db")
     from eventwatcher import db as db_module
+
     db_module.init_db(db_path)
 
     m = monitor.Monitor(temp_watch_group, db_path, log_func=lambda x: None)

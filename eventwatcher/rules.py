@@ -11,6 +11,7 @@ Rules may also define optional fields:
   - affected_files_expr (optional): a Python expression to determine which files are affected.
 """
 
+
 def evaluate_rule(rule, context):
     """
     Evaluate a single rule against the given context.
@@ -25,7 +26,7 @@ def evaluate_rule(rule, context):
     Returns:
       (triggered: bool, affected_files: list)
     """
-    condition = rule.get('condition')
+    condition = rule.get("condition")
     if not condition:
         return False, []
 
@@ -33,16 +34,16 @@ def evaluate_rule(rule, context):
     # This context is available to the eval() call.
     local_context = context.copy()
     # Pre-populate an empty list for affected_files in case the condition uses it.
-    local_context['affected_files'] = []
+    local_context["affected_files"] = []
 
     # Define a set of safe built-in functions for use in rule expressions.
     safe_builtins = {
-        'min': min,
-        'max': max,
-        'any': any,
-        'all': all,
-        'sum': sum,
-        'len': len,
+        "min": min,
+        "max": max,
+        "any": any,
+        "all": all,
+        "sum": sum,
+        "len": len,
     }
 
     try:
@@ -53,11 +54,17 @@ def evaluate_rule(rule, context):
 
     # Determine which files are affected.
     affected_files = []
-    if 'affected_files_expr' in rule:
+    if "affected_files_expr" in rule:
         try:
-            affected_files = eval(rule['affected_files_expr'], {"__builtins__": safe_builtins}, local_context)
+            affected_files = eval(
+                rule["affected_files_expr"],
+                {"__builtins__": safe_builtins},
+                local_context,
+            )
         except Exception as e:
-            raise ValueError(f"Error evaluating affected_files_expr for rule '{rule.get('name', 'Unnamed')}': {e}")
+            raise ValueError(
+                f"Error evaluating affected_files_expr for rule '{rule.get('name', 'Unnamed')}': {e}"
+            )
     else:
         # If no affected_files_expr is provided and the rule is triggered,
         # assume all files in the sample are affected.
@@ -65,6 +72,7 @@ def evaluate_rule(rule, context):
             affected_files = list(local_context.get("data", {}).keys())
 
     return triggered, affected_files
+
 
 def evaluate_rules(rules, context):
     """
@@ -84,7 +92,7 @@ def evaluate_rules(rules, context):
                 "name": rule.get("name", "Unnamed Event"),
                 "event_type": rule.get("event_type"),
                 "severity": rule.get("severity"),
-                "affected_files": affected_files
+                "affected_files": affected_files,
             }
             triggered_events.append(event_record)
     return triggered_events
