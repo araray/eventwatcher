@@ -1,239 +1,320 @@
-"""Tests for the improved monitor module."""
-
+import hashlib
+import json
+import logging
 import os
-import tempfile
 import time
-import unittest
 
-from eventwatcher.monitor import Monitor, compare_samples, get_event_type
-
-
-class TestMonitorComparison(unittest.TestCase):
-    def test_compare_samples_new_file(self):
-        """Test detection of new files."""
-        sample1 = {
-            "/path/file1": {"size": 100, "md5": "abc"},
-            "/path/file2": {"size": 200, "md5": "def"}
-        }
-        sample2 = {
-            "/path/file1": {"size": 100, "md5": "abc"}
-        }
-
-        diff = compare_samples(sample1, sample2)
-        self.assertEqual(diff['new'], ["/path/file2"])
-        self.assertEqual(diff['removed'], [])
-        self.assertEqual(diff['modified'], {})
-
-    def test_compare_samples_removed_file(self):
-        """Test detection of removed files."""
-        sample1 = {
-            "/path/file1": {"size": 100, "md5": "abc"}
-        }
-        sample2 = {
-            "/path/file1": {"size": 100, "md5": "abc"},
-            "/path/file2": {"size": 200, "md5": "def"}
-        }
-
-        diff = compare_samples(sample1, sample2)
-        self.assertEqual(diff['new'], [])
-        self.assertEqual(diff['removed'], ["/path/file2"])
-        self.assertEqual(diff['modified'], {})
-
-    def test_compare_samples_modified_file(self):
-        """Test detection of modified files."""
-        sample1 = {
-            "/path/file1": {"size": 150, "md5": "abc"}
-        }
-        sample2 = {
-            "/path/file1": {"size": 100, "md5": "abc"}
-        }
-
-        diff = compare_samples(sample1, sample2)
-        self.assertEqual(diff['new'], [])
-        self.assertEqual(diff['removed'], [])
-        self.assertTrue("/path/file1" in diff['modified'])
-        self.assertEqual(
-            diff['modified']["/path/file1"]["size"],
-            {"old": 100, "new": 150}
-        )
-
-    def test_compare_samples_ignore_sample_epoch(self):
-        """Test that sample_epoch is ignored in comparisons."""
-        sample1 = {
-            "/path/file1": {"size": 100, "md5": "abc", "sample_epoch": 1000}
-        }
-        sample2 = {
-            "/path/file1": {"size": 100, "md5": "abc", "sample_epoch": 900}
-        }
-
-        diff = compare_samples(sample1, sample2)
-        self.assertEqual(diff['new'], [])
-        self.assertEqual(diff['removed'], [])
-        self.assertEqual(diff['modified'], {})
+from eventwatcher import db, rule_helpers, rules
 
 
-class TestEventTypes(unittest.TestCase):
-    def test_get_event_type_size_change(self):
-        """Test event type detection for size changes."""
-        changes = {
-            "size": {"old": 100, "new": 200}
-        }
-        self.assertEqual(get_event_type(changes), "size_changed")
+def compare_samples(sample1, sample2):
+    """
+    Compare two samples and return a list of differences.
+    """
+    differences = []
+    for item in sample1.items():
+        path, metrics = item
+        if path not in sample2:
+            differences.append((path, "new file"))
+        else:
+            for key, value in metrics.items():
+                if key not in sample2[path]:
+                    differences.append((path, f"missing {key}"))
+                elif sample2[path][key] != value:
+                    differences.append((path, f"different {key}"))
 
-    def test_get_event_type_content_modification(self):
-        """Test event type detection for content modifications."""
-        changes = {
-            "last_modified": {"old": 1000, "new": 1100}
-        }
-        self.assertEqual(get_event_type(changes), "content_modified")
-
-    def test_get_event_type_multiple_changes(self):
-        """Test event type detection for multiple changes."""
-        changes = {
-            "size": {"old": 100, "new": 200},
-            "md5": {"old": "abc", "new": "def"}
-        }
-        self.assertEqual(
-            get_event_type(changes),
-            "content_changed,size_changed"
-        )
-
-    def test_get_event_type_pattern_changes(self):
-        """Test event type detection for pattern changes."""
-        changes = {
-            "pattern_found": {"old": False, "new": True}
-        }
-        self.assertEqual(get_event_type(changes), "pattern_found")
-
-        changes = {
-            "pattern_found": {"old": True, "new": False}
-        }
-        self.assertEqual(get_event_type(changes), "pattern_removed")
+    return differences
 
 
-class TestMonitorIntegration(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        """Set up temporary directory and files for testing."""
-        cls.temp_dir = tempfile.mkdtemp()
-        cls.test_file = os.path.join(cls.temp_dir, "test.txt")
-        with open(cls.test_file, "w") as f:
-            f.write("Initial content")
+def compute_file_md5(file_path, block_size=65536):
+    """Compute MD5 hash of a file."""
+    md5 = hashlib.md5()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(block_size), b""):
+                md5.update(chunk)
+        return md5.hexdigest()
+    except Exception:
+        return None
 
-    @classmethod
-    def tearDownClass(cls):
-        """Clean up temporary files."""
+
+def compute_file_sha256(file_path, block_size=65536):
+    """Compute SHA256 hash of a file."""
+    sha256 = hashlib.sha256()
+    try:
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(block_size), b""):
+                sha256.update(chunk)
+        return sha256.hexdigest()
+    except Exception:
+        return None
+
+
+def collect_sample(watch_group, log_dir):
+    """Collect sample data for the watch group."""
+    sample = {}
+    sample_epoch = int(time.time())
+    watch_items = watch_group.get("watch_items", [])
+    pattern = watch_group.get("pattern")
+    max_depth = watch_group.get("max_depth", 1)
+
+    def scan_path(path, current_depth):
+        if os.path.isfile(path):
+            metrics = {}
+            try:
+                stat = os.stat(path)
+                metrics["size"] = stat.st_size
+                metrics["last_modified"] = stat.st_mtime
+                metrics["creation_time"] = stat.st_ctime
+                metrics["md5"] = compute_file_md5(path)
+                metrics["sha256"] = compute_file_sha256(path)
+                metrics["user_id"] = stat.st_uid
+                metrics["group_id"] = stat.st_gid
+                metrics["mode"] = oct(stat.st_mode & 0o777)
+                if pattern:
+                    with open(path, "r", errors="ignore") as f:
+                        content = f.read()
+                    metrics["pattern_found"] = pattern in content
+                else:
+                    metrics["pattern_found"] = False
+                sample[path] = metrics
+            except Exception as e:
+                logging.error(f"Error collecting sample for {path}: {e}")
+        elif os.path.isdir(path) and current_depth <= max_depth:
+            try:
+                for entry in os.listdir(path):
+                    full_path = os.path.join(path, entry)
+                    scan_path(full_path, current_depth + 1)
+            except Exception as e:
+                logging.error(f"Error scanning directory {path}: {e}")
+
+    for item in watch_items:
+        if "*" in item or "?" in item:
+            import glob
+
+            for path in glob.glob(item):
+                scan_path(path, 1)
+        else:
+            scan_path(item, 1)
+
+    return sample, sample_epoch
+
+
+class Monitor:
+    def __init__(self, watch_group, db_path, log_dir, log_level="INFO"):
+        """
+        Initialize a monitor instance.
+
+        Args:
+            watch_group (dict): Watch group configuration
+            db_path (str): Path to the database file
+            log_dir (str): Base directory for logs
+            log_level (str): Logging level
+        """
+        self.watch_group = watch_group
+        self.db_path = db_path
+        self.log_dir = os.path.abspath(log_dir)
+        self.log_level = log_level
+        self._stop = False
+
+        # Print debug info before setting up logger
+        print(f"Monitor init - Watch group: {watch_group.get('name')}")
+        print(f"Monitor init - Log dir: {self.log_dir}")
+        print(f"Monitor init - Log level: {self.log_level}")
+
+        self.logger = self.setup_logger()
+
+    def setup_logger(self):
+        """Set up logging for this monitor instance."""
         try:
-            os.remove(cls.test_file)
-            os.rmdir(cls.temp_dir)
-        except:
-            pass
+            from eventwatcher import logger as event_logger
 
-    def setUp(self):
-        """Set up a Monitor instance for each test."""
-        self.watch_group = {
-            "name": "TestGroup",
-            "watch_items": [self.test_file],
-            "sample_rate": 60,
-            "max_samples": 2,
-            "pattern": "ERROR",
-            "rules": [
-                {
-                    "name": "ContentChanged",
-                    "condition": "True",  # Always evaluate for testing
-                    "severity": "INFO"
-                }
-            ]
-        }
-        self.db_path = os.path.join(self.temp_dir, "test.db")
-        self.log_dir = os.path.join(self.temp_dir, "logs")
-        os.makedirs(self.log_dir, exist_ok=True)
+            # Create watch group specific log directory if using subdirectories
+            wg_name = self.watch_group.get("name", "Unnamed")
+            print(f"Setting up logger for watch group: {wg_name}")
 
-        # Initialize database
-        from eventwatcher.db import init_db
-        init_db(self.db_path)
+            # Ensure log directory exists
+            os.makedirs(self.log_dir, exist_ok=True)
+            print(f"Ensured log directory exists: {self.log_dir}")
 
-        self.monitor = Monitor(
-            self.watch_group,
-            self.db_path,
-            self.log_dir,
-            log_level="DEBUG"
-        )
+            # Create log filename from watch group name
+            log_filename = f"{wg_name.replace(' ', '_').replace('/', '_')}.log"
+            print(f"Log filename: {log_filename}")
 
-    def tearDown(self):
-        """Clean up after each test."""
+            # Test write permissions
+            test_file = os.path.join(self.log_dir, ".test_write")
+            try:
+                with open(test_file, "w") as f:
+                    f.write("test")
+                os.remove(test_file)
+                print("Successfully tested write permissions")
+            except Exception as e:
+                print(f"Warning: Write permission test failed: {e}")
+
+            # Set up the logger
+            monitor_logger = event_logger.setup_logger(
+                f"Monitor-{wg_name}",
+                self.log_dir,
+                log_filename,
+                level=getattr(logging, self.log_level.upper(), logging.INFO),
+                console=True,  # Enable console output for debugging
+            )
+
+            # Log initial setup
+            monitor_logger.info(f"Initialized monitor for watch group: {wg_name}")
+            monitor_logger.info(f"Log directory: {self.log_dir}")
+            monitor_logger.info(f"Log file: {log_filename}")
+
+            return monitor_logger
+
+        except Exception as e:
+            # Print the full error
+            import traceback
+
+            print(f"Failed to setup monitor logger: {e}")
+            print("Full traceback:")
+            traceback.print_exc()
+
+            # Fallback to basic logging if setup fails
+            basic_logger = logging.getLogger(
+                f"Monitor-{self.watch_group.get('name', 'Unnamed')}"
+            )
+            basic_logger.setLevel(
+                getattr(logging, self.log_level.upper(), logging.INFO)
+            )
+            return basic_logger
+
+    def run_once(self):
+        """Run one monitoring cycle."""
         try:
-            os.remove(self.db_path)
-            for f in os.listdir(self.log_dir):
-                os.remove(os.path.join(self.log_dir, f))
-            os.rmdir(self.log_dir)
-        except:
-            pass
+            self.logger.info("Starting monitoring cycle.")
+            sample, sample_epoch = collect_sample(self.watch_group, self.log_dir)
+            watch_group_name = self.watch_group.get("name", "Unnamed")
 
-    def test_initial_run(self):
-        """Test initial monitoring run."""
-        sample, events = self.monitor.run_once()
+            # Get previous sample
+            previous_sample = db.get_last_n_samples(self.db_path, watch_group_name)
 
-        # First run should have no events as there's no previous sample
-        self.assertTrue(len(events) == 0)
-        self.assertTrue(self.test_file in sample)
-        self.assertTrue("size" in sample[self.test_file])
-        self.assertTrue("md5" in sample[self.test_file])
+            # Insert current sample records
+            for file_path, file_data in sample.items():
+                try:
+                    db.insert_sample_record(
+                        self.db_path,
+                        watch_group_name,
+                        sample_epoch,
+                        file_path,
+                        file_data,
+                    )
+                except Exception as e:
+                    self.logger.error(f"Error inserting sample record: {e}")
 
-    def test_content_modification(self):
-        """Test detection of content modifications."""
-        # First run to establish baseline
-        self.monitor.run_once()
+            # Log raw sample in DEBUG mode
+            if self.logger.getEffectiveLevel() <= logging.DEBUG:
+                self.logger.debug(f"Raw sample JSON: {json.dumps(sample, indent=2)}")
 
-        # Modify file content
-        time.sleep(1)  # Ensure timestamp change
-        with open(self.test_file, "w") as f:
-            f.write("Modified content")
+            if not previous_sample:
+                self.logger.info("No previous sample found; skipping rule evaluation.")
+                return sample, []
 
-        # Second run to detect changes
-        sample, events = self.monitor.run_once()
+            # Compare samples
+            diff = compare_samples(sample, previous_sample)
+            if diff:
+                self.logger.debug(f"Found differences: {diff}")
+            else:
+                self.logger.info("No differences found.")
 
-        self.assertTrue(len(events) > 0)
-        self.assertTrue(any(
-            e["event_type"] in ("content_changed", "content_modified", "size_changed")
-            for e in events
-        ))
+            # Evaluate rules
+            now = int(time.time())
+            context = {
+                "data": sample,
+                "now": now,
+                "aggregate": rule_helpers.aggregate_metric,
+            }
 
-    def test_file_removal(self):
-        """Test detection of file removal."""
-        # First run to establish baseline
-        self.monitor.run_once()
+            triggered = rules.evaluate_rules(self.watch_group.get("rules", []), context)
+            triggered_events = []
 
-        # Remove the file
-        os.remove(self.test_file)
+            # Process triggered rules
+            for event in triggered:
+                try:
+                    rule_name = event.get("name")
+                    event_type = event.get("event_type")
+                    severity = event.get("severity")
+                    affected_files = event.get("affected_files", [])
 
-        # Second run to detect removal
-        sample, events = self.monitor.run_once()
+                    for file_path in affected_files:
+                        # Check for duplicate events
+                        prev_event = db.get_last_event_for_rule(
+                            self.db_path, watch_group_name, rule_name, file_path
+                        )
 
-        self.assertTrue(len(events) > 0)
-        self.assertTrue(any(
-            e["event_type"] == "removed"
-            for e in events
-        ))
+                        if prev_event:
+                            prev_sample = db.get_sample_record(
+                                self.db_path,
+                                watch_group_name,
+                                prev_event["sample_epoch"],
+                                file_path,
+                            )
+                            current_metrics = sample.get(file_path, {})
 
-    def test_pattern_detection(self):
-        """Test pattern detection changes."""
-        # First run to establish baseline
-        self.monitor.run_once()
+                            if prev_sample and (
+                                prev_sample.get("md5") == current_metrics.get("md5")
+                                and prev_sample.get("last_modified")
+                                == current_metrics.get("last_modified")
+                            ):
+                                self.logger.info(
+                                    f"Skipping duplicate event for {file_path} under rule '{rule_name}'"
+                                )
+                                continue
 
-        # Add pattern to file
-        with open(self.test_file, "w") as f:
-            f.write("An ERROR occurred")
+                        # Insert event
+                        db.insert_event(
+                            self.db_path,
+                            watch_group_name,
+                            rule_name,
+                            sample_epoch,
+                            event_type=event_type,
+                            severity=severity,
+                            affected_files=[file_path],
+                        )
 
-        # Second run to detect pattern
-        sample, events = self.monitor.run_once()
+                        triggered_events.append(
+                            {
+                                "rule": rule_name,
+                                "event_type": event_type,
+                                "severity": severity,
+                                "affected_file": file_path,
+                                "sample_epoch": sample_epoch,
+                            }
+                        )
 
-        self.assertTrue(len(events) > 0)
-        self.assertTrue(any(
-            "pattern_found" in e["event_type"]
-            for e in events
-        ))
+                except Exception as e:
+                    self.logger.error(
+                        f"Error processing rule {event.get('name', 'unknown')}: {e}"
+                    )
 
+            self.logger.info("Monitoring cycle completed.")
+            return sample, triggered_events
+        except Exception as e:
+            print(f"Error in run_once: {e}")
+            import traceback
 
-if __name__ == "__main__":
-    unittest.main()
+            traceback.print_exc()
+            raise
+
+    def run(self):
+        """Run the monitor continuously."""
+        while not self._stop:
+            try:
+                self.run_once()
+                sample_rate = max(
+                    self.watch_group.get("sample_rate", 60), 60
+                )  # Minimum 60 seconds
+                time.sleep(sample_rate)
+            except Exception as e:
+                self.logger.error(f"Error in monitor run loop: {e}")
+                time.sleep(60)  # Wait before retrying
+
+    def stop(self):
+        """Stop the monitor."""
+        self._stop = True
+        self.logger.info("Monitor stopping.")
