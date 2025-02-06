@@ -9,21 +9,145 @@ from eventwatcher import db, rule_helpers, rules
 
 def compare_samples(sample1, sample2):
     """
-    Compare two samples and return a list of differences.
+    Compare two samples and return a detailed list of differences.
+    Handles both file and directory comparisons intelligently.
+
+    Args:
+        sample1 (dict): Current sample data
+        sample2 (dict): Previous sample data
+
+    Returns:
+        dict: Structured differences containing:
+            - new: list of new files/dirs
+            - removed: list of removed files/dirs
+            - modified: dict of modified files/dirs with their specific changes
     """
-    differences = []
-    for item in sample1.items():
-        path, metrics = item
+    differences = {
+        'new': [],
+        'removed': [],
+        'modified': {}
+    }
+
+    # Find new and modified items
+    for path, metrics in sample1.items():
         if path not in sample2:
-            differences.append((path, "new file"))
+            differences['new'].append(path)
         else:
+            changes = {}
+            # Compare all metrics except sample-specific ones
+            skip_fields = {'sample_epoch'}
             for key, value in metrics.items():
-                if key not in sample2[path]:
-                    differences.append((path, f"missing {key}"))
-                elif sample2[path][key] != value:
-                    differences.append((path, f"different {key}"))
+                if key not in skip_fields and value != sample2[path].get(key):
+                    changes[key] = {
+                        'old': sample2[path].get(key),
+                        'new': value
+                    }
+            if changes:
+                differences['modified'][path] = changes
+
+    # Find removed items
+    for path in sample2:
+        if path not in sample1:
+            differences['removed'].append(path)
 
     return differences
+
+def get_event_type(changes, item_type="file"):
+    """
+    Determine specific event type based on the changes detected.
+
+    Args:
+        changes (dict): Changes detected for the item
+        item_type (str): Either "file" or "directory"
+
+    Args:
+        changes (dict): Changes detected for a specific file/directory
+
+    Returns:
+        str: Detailed event type description
+    """
+    event_types = []
+
+    for field, change in changes.items():
+        if item_type == "file":
+            if field == 'size':
+                event_types.append('size_changed')
+            elif field == 'last_modified':
+                event_types.append('content_modified')
+            elif field == 'pattern_found':
+                old_val = change.get('old', False)
+                new_val = change.get('new', False)
+                if not old_val and new_val:
+                    event_types.append('pattern_found')
+                elif old_val and not new_val:
+                    event_types.append('pattern_removed')
+            elif field in ('md5', 'sha256'):
+                event_types.append('content_changed')
+        else:  # directory
+            if field == 'file_count':
+                event_types.append('files_changed')
+            elif field == 'dir_count':
+                event_types.append('subdirs_changed')
+            elif field == 'total_size':
+                event_types.append('dir_size_changed')
+
+    if not event_types:
+        return 'unknown_modification'
+
+    return ','.join(sorted(set(event_types)))
+
+def evaluate_rule_for_file(rule, context, file_path, sample, previous_sample):
+    """
+    Evaluate a rule for a specific file, checking if it actually changed.
+
+    Args:
+        rule (dict): Rule configuration
+        context (dict): Evaluation context
+        file_path (str): Path to the file being evaluated
+        sample (dict): Current sample data
+        previous_sample (dict): Previous sample data
+
+    Returns:
+        tuple: (triggered, event_type)
+    """
+    # First check if the file actually changed
+    if file_path not in sample or (
+        previous_sample and
+        file_path in previous_sample and
+        all(
+            sample[file_path].get(k) == previous_sample[file_path].get(k)
+            for k in sample[file_path]
+            if k != 'sample_epoch'
+        )
+    ):
+        return False, None
+
+    # Now evaluate the rule condition
+    file_context = context.copy()
+    file_context['file'] = sample.get(file_path, {})
+    file_context['prev_file'] = previous_sample.get(file_path, {}) if previous_sample else {}
+
+    try:
+        triggered = eval(rule['condition'], {"__builtins__": rule_helpers.SAFE_BUILTINS}, file_context)
+    except Exception as e:
+        logging.error(f"Error evaluating rule for file {file_path}: {e}")
+        return False, None
+
+    if not triggered:
+        return False, None
+
+    # Determine the specific type of change
+    changes = {}
+    if previous_sample and file_path in previous_sample:
+        for key, value in sample[file_path].items():
+            if key != 'sample_epoch' and value != previous_sample[file_path].get(key):
+                changes[key] = {
+                    'old': previous_sample[file_path].get(key),
+                    'new': value
+                }
+
+    event_type = get_event_type(changes) if changes else 'created'
+    return True, event_type
 
 
 def compute_file_md5(file_path, block_size=65536):
@@ -207,18 +331,14 @@ class Monitor:
                 except Exception as e:
                     self.logger.error(f"Error inserting sample record: {e}")
 
-            # Log raw sample in DEBUG mode
-            if self.logger.getEffectiveLevel() <= logging.DEBUG:
-                self.logger.debug(f"Raw sample JSON: {json.dumps(sample, indent=2)}")
-
             if not previous_sample:
                 self.logger.info("No previous sample found; skipping rule evaluation.")
                 return sample, []
 
-            # Compare samples
-            diff = compare_samples(sample, previous_sample)
-            if diff:
-                self.logger.debug(f"Found differences: {diff}")
+            # Compare samples and get detailed differences
+            differences = compare_samples(sample, previous_sample)
+            if differences['new'] or differences['removed'] or differences['modified']:
+                self.logger.debug(f"Found differences: {json.dumps(differences, indent=2)}")
             else:
                 self.logger.info("No differences found.")
 
@@ -228,77 +348,73 @@ class Monitor:
                 "data": sample,
                 "now": now,
                 "aggregate": rule_helpers.aggregate_metric,
+                "differences": differences
             }
 
-            triggered = rules.evaluate_rules(self.watch_group.get("rules", []), context)
             triggered_events = []
 
-            # Process triggered rules
-            for event in triggered:
-                try:
-                    rule_name = event.get("name")
-                    event_type = event.get("event_type")
-                    severity = event.get("severity")
-                    affected_files = event.get("affected_files", [])
+            # Process each rule
+            for rule in self.watch_group.get("rules", []):
+                affected_files = set()
 
-                    for file_path in affected_files:
-                        # Check for duplicate events
-                        prev_event = db.get_last_event_for_rule(
-                            self.db_path, watch_group_name, rule_name, file_path
-                        )
+                # Check new files
+                for file_path in differences['new']:
+                    triggered, event_type = evaluate_rule_for_file(
+                        rule, context, file_path, sample, previous_sample
+                    )
+                    if triggered:
+                        affected_files.add((file_path, event_type or 'created'))
 
-                        if prev_event:
-                            prev_sample = db.get_sample_record(
-                                self.db_path,
-                                watch_group_name,
-                                prev_event["sample_epoch"],
-                                file_path,
-                            )
-                            current_metrics = sample.get(file_path, {})
+                # Check modified files
+                for file_path in differences['modified']:
+                    triggered, event_type = evaluate_rule_for_file(
+                        rule, context, file_path, sample, previous_sample
+                    )
+                    if triggered:
+                        affected_files.add((file_path, event_type or 'modified'))
 
-                            if prev_sample and (
-                                prev_sample.get("md5") == current_metrics.get("md5")
-                                and prev_sample.get("last_modified")
-                                == current_metrics.get("last_modified")
-                            ):
-                                self.logger.info(
-                                    f"Skipping duplicate event for {file_path} under rule '{rule_name}'"
-                                )
-                                continue
+                # Check removed files
+                for file_path in differences['removed']:
+                    # Special handling for removed files since they're not in current sample
+                    file_context = context.copy()
+                    file_context['file'] = previous_sample.get(file_path, {})
+                    try:
+                        if eval(rule['condition'], {"__builtins__": rule_helpers.SAFE_BUILTINS}, file_context):
+                            affected_files.add((file_path, 'removed'))
+                    except Exception as e:
+                        self.logger.error(f"Error evaluating rule for removed file {file_path}: {e}")
 
-                        # Insert event
+                # Create events for affected files
+                for file_path, event_type in affected_files:
+                    try:
+                        # Insert event with specific event type
                         db.insert_event(
                             self.db_path,
                             watch_group_name,
-                            rule_name,
+                            rule['name'],
                             sample_epoch,
                             event_type=event_type,
-                            severity=severity,
+                            severity=rule.get('severity'),
                             affected_files=[file_path],
                         )
 
-                        triggered_events.append(
-                            {
-                                "rule": rule_name,
-                                "event_type": event_type,
-                                "severity": severity,
-                                "affected_file": file_path,
-                                "sample_epoch": sample_epoch,
-                            }
+                        triggered_events.append({
+                            "rule": rule['name'],
+                            "event_type": event_type,
+                            "severity": rule.get('severity'),
+                            "affected_file": file_path,
+                            "sample_epoch": sample_epoch,
+                        })
+                    except Exception as e:
+                        self.logger.error(
+                            f"Error creating event for {file_path} under rule '{rule.get('name')}': {e}"
                         )
-
-                except Exception as e:
-                    self.logger.error(
-                        f"Error processing rule {event.get('name', 'unknown')}: {e}"
-                    )
 
             self.logger.info("Monitoring cycle completed.")
             return sample, triggered_events
-        except Exception as e:
-            print(f"Error in run_once: {e}")
-            import traceback
 
-            traceback.print_exc()
+        except Exception as e:
+            self.logger.error(f"Error in run_once: {str(e)}", exc_info=True)
             raise
 
     def run(self):
