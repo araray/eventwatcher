@@ -128,7 +128,11 @@ def evaluate_rule_for_file(rule, context, file_path, sample, previous_sample):
     file_context['prev_file'] = previous_sample.get(file_path, {}) if previous_sample else {}
 
     try:
-        triggered = eval(rule['condition'], {"__builtins__": rule_helpers.SAFE_BUILTINS}, file_context)
+        triggered = eval(
+            rule['condition'],
+            rule_helpers.build_safe_eval_context(),
+            file_context
+        )
     except Exception as e:
         logging.error(f"Error evaluating rule for file {file_path}: {e}")
         return False, None
@@ -379,7 +383,12 @@ class Monitor:
                     file_context = context.copy()
                     file_context['file'] = previous_sample.get(file_path, {})
                     try:
-                        if eval(rule['condition'], {"__builtins__": rule_helpers.SAFE_BUILTINS}, file_context):
+                        triggered = eval(
+                            rule['condition'],
+                            rule_helpers.build_safe_eval_context(),
+                            file_context
+                        )
+                        if triggered:
                             affected_files.add((file_path, 'removed'))
                     except Exception as e:
                         self.logger.error(f"Error evaluating rule for removed file {file_path}: {e}")
