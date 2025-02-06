@@ -69,16 +69,17 @@ class ThreadManager:
 
         Returns:
             dict: A dictionary with thread information:
-                - name (str): The thread's name.
-                - is_alive (bool): Whether the thread is still running.
-                - daemon (bool): Whether the thread is a daemon.
+                - name (str): The thread's name
+                - is_alive (bool): Whether the thread is still running
+                - daemon (bool): Whether the thread is a daemon
+                - id (int): Thread identifier
         """
-        status = {
-            'name': thread.name,
-            'is_alive': thread.is_alive(),
-            'daemon': thread.daemon,
+        return {
+            'name': str(thread.name),
+            'is_alive': bool(thread.is_alive()),
+            'daemon': bool(thread.daemon),
+            'id': thread.ident
         }
-        return status
 
     def get_all_statuses(self):
         """
@@ -86,11 +87,9 @@ class ThreadManager:
 
         Returns:
             dict: A dictionary where keys are thread names and values are status dictionaries.
+                 All values are guaranteed to be JSON-serializable.
         """
-        statuses = {}
-        for thread in self.threads:
-            statuses[thread.name] = self.get_status(thread)
-        return statuses
+        return {str(thread.name): self.get_status(thread) for thread in self.threads}
 
     def stop_all(self):
         """

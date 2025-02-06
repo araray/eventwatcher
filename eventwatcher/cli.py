@@ -99,9 +99,18 @@ def start(ctx, foreground):
     Start the EventWatcher service.
     """
     cfg = ctx.obj.get("config")
-    config_dir = os.path.dirname(ctx.obj.get("config_path") or "./config.toml")
+    config_path = ctx.obj.get("config_path")
+
+    if not config_path:
+        # If no config path was provided, use the default
+        config_path = "./config.toml"
+        if not os.path.exists(config_path):
+            click.echo("No config file found. Please specify one with --config or create config.toml in current directory.")
+            ctx.exit(1)
+
+    config_dir = os.path.dirname(os.path.abspath(config_path))
     db_path = os.path.join(config_dir, cfg.get("database", {}).get("db_name", "eventwatcher.db"))
-    log_dir = get_log_dir(cfg, ctx.obj.get("config_path"))
+    log_dir = get_log_dir(cfg, config_path)
     pid_file = get_pid_file(log_dir)
     watch_groups_config_path = cfg.get("watch_groups", {}).get("configs_dir", "watch_groups.yaml")
 
@@ -112,14 +121,18 @@ def start(ctx, foreground):
         return
 
     watch_groups = watch_groups_data.get("watch_groups", [])
-    wg_tm = daemon_module.periodic_cleanup_daemon(db_path, watch_groups)
 
     if foreground:
         click.echo("Running in foreground...")
         monitors = []
         threads = []
         for group in watch_groups:
-            m = monitor.Monitor(group, db_path, log_dir, log_level=cfg.get("logging", {}).get("level", "INFO"))
+            m = monitor.Monitor(
+                group,
+                db_path,
+                os.path.abspath(log_dir),  # Ensure absolute path
+                log_level=cfg.get("logging", {}).get("level", "INFO")
+            )
             monitors.append(m)
             t = threading.Thread(target=m.run)
             t.daemon = True
@@ -133,7 +146,14 @@ def start(ctx, foreground):
                 m.stop()
     else:
         click.echo("Starting daemon...")
-        daemon_module.run_daemon(watch_groups, db_path, pid_file=pid_file, config=cfg)
+        # Pass the absolute config path to run_daemon
+        daemon_module.run_daemon(
+            watch_groups=watch_groups,
+            db_path=db_path,
+            pid_file=pid_file,
+            config=cfg,
+            config_path=os.path.abspath(config_path)  # Pass absolute config path
+        )
 
 @main.command()
 @click.pass_context
