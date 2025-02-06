@@ -1,4 +1,30 @@
+"""
+Rule helper functions for EventWatcher.
+
+This module provides helper functions for evaluating rules and a set of safe
+built-in functions that can be used in rule conditions.
+"""
+
 import fnmatch
+
+# Define safe built-in functions that can be used in rule expressions
+SAFE_BUILTINS = {
+    'min': min,
+    'max': max,
+    'any': any,
+    'all': all,
+    'sum': sum,
+    'len': len,
+    'abs': abs,
+    'bool': bool,
+    'int': int,
+    'float': float,
+    'str': str,
+    'list': list,
+    'dict': dict,
+    'set': set,
+    'round': round
+}
 
 
 def aggregate_metric(data, pattern, metric, func=min):
@@ -53,3 +79,13 @@ def get_previous_metric(db_path, watch_group, file_pattern, metric, order="DESC"
     if row:
         return row[0]
     return None
+
+
+def build_safe_eval_context():
+    """
+    Build a safe evaluation context for rule conditions.
+
+    Returns:
+        dict: Context dictionary with safe built-in functions.
+    """
+    return {"__builtins__": SAFE_BUILTINS}
