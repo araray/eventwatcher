@@ -13,18 +13,48 @@ def get_db_connection(db_path):
     return conn
 
 
-def init_db(db_path):
+def migrate_db_schema(db_path: str):
+    """
+    Migrate database schema to support new directory fields.
+    Should be called from init_db() for new databases and can be
+    run manually for existing ones.
+    """
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+
+    try:
+        # Check if columns exist first
+        cur.execute("PRAGMA table_info(samples)")
+        columns = {col[1] for col in cur.fetchall()}
+
+        # Add new columns if they don't exist
+        if 'is_dir' not in columns:
+            cur.execute("ALTER TABLE samples ADD COLUMN is_dir BOOLEAN")
+        if 'files_count' not in columns:
+            cur.execute("ALTER TABLE samples ADD COLUMN files_count INTEGER")
+        if 'subdirs_count' not in columns:
+            cur.execute("ALTER TABLE samples ADD COLUMN subdirs_count INTEGER")
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
+
+
+def init_db(db_path: str):
     """
     Initialize the SQLite database with the required tables.
-    Creates the 'events' table and the 'samples' table.
     """
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = get_db_connection(db_path)
+    conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
     # Create events table
-    cur.execute(
-        """
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_uid TEXT NOT NULL,
@@ -37,17 +67,16 @@ def init_db(db_path):
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(event_uid)
         )
-    """
-    )
+    """)
 
-    # Create samples table
-    cur.execute(
-        """
+    # Create samples table with new fields
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             watch_group TEXT NOT NULL,
             sample_epoch INTEGER NOT NULL,
             file_path TEXT NOT NULL,
+            type TEXT NOT NULL,
             size INTEGER,
             user_id INTEGER,
             group_id INTEGER,
@@ -61,8 +90,7 @@ def init_db(db_path):
             files_count INTEGER,
             subdirs_count INTEGER
         )
-    """
-    )
+    """)
 
     conn.commit()
     conn.close()
@@ -102,21 +130,23 @@ def insert_event(
     conn.close()
 
 
-def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_data):
+def insert_sample_record(db_path: str, watch_group: str, sample_epoch: int,
+                        file_path: str, file_data: dict):
     """
-    Insert an individual file's data into the samples table.
+    Insert a sample record with support for directory metrics.
     """
-    conn = get_db_connection(db_path)
+    conn = sqlite3.connect(db_path)
     cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO samples (
-            watch_group, sample_epoch, file_path, size,
-            user_id, group_id, mode, last_modified,
-            creation_time, md5, sha256, pattern_found
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """,
-        (
+
+    try:
+        cur.execute("""
+            INSERT INTO samples (
+                watch_group, sample_epoch, file_path, size,
+                user_id, group_id, mode, last_modified,
+                creation_time, md5, sha256, pattern_found,
+                is_dir, files_count, subdirs_count
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
             watch_group,
             sample_epoch,
             file_path,
@@ -129,13 +159,19 @@ def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_dat
             file_data.get("md5"),
             file_data.get("sha256"),
             file_data.get("pattern_found"),
-            file_data.get("is_dir"),
+            file_data.get("is_dir", False),
             file_data.get("files_count"),
-            file_data.get("subdirs_count"),
-        ),
-    )
-    conn.commit()
-    conn.close()
+            file_data.get("subdirs_count")
+        ))
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        raise e
+
+    finally:
+        conn.close()
 
 
 def get_last_event_for_rule(db_path, watch_group, rule_name, file_path):
