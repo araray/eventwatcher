@@ -1,56 +1,128 @@
+import concurrent.futures
 import hashlib
 import json
 import logging
 import os
 import time
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, Optional, Tuple
 
-from eventwatcher import db, rule_helpers, rules
+from eventwatcher import db, rule_helpers
 
 
-def compare_samples(sample1, sample2):
+@dataclass
+class DirectoryMetrics:
+    """Container for directory metrics with timeout handling."""
+
+    total_size: int = -1
+    files_count: int = -1
+    subdirs_count: int = -1
+    timed_out: bool = False
+
+
+def get_dir_metrics(path: str, timeout_seconds: float) -> DirectoryMetrics:
     """
-    Compare two samples and return a detailed list of differences.
-    Handles both file and directory comparisons intelligently.
+    Calculate directory metrics with timeout handling.
 
     Args:
-        sample1 (dict): Current sample data
-        sample2 (dict): Previous sample data
+        path: Directory path to analyze
+        timeout_seconds: Maximum time to spend analyzing
 
     Returns:
-        dict: Structured differences containing:
-            - new: list of new files/dirs
-            - removed: list of removed files/dirs
-            - modified: dict of modified files/dirs with their specific changes
+        DirectoryMetrics object with collected metrics
     """
-    differences = {
-        'new': [],
-        'removed': [],
-        'modified': {}
-    }
+    metrics = DirectoryMetrics()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor() as executor:
+            future = executor.submit(_collect_dir_metrics, path)
+            result = future.result(timeout=timeout_seconds)
+            if result:
+                metrics.total_size = result[0]
+                metrics.files_count = result[1]
+                metrics.subdirs_count = result[2]
+    except concurrent.futures.TimeoutError:
+        logging.warning(f"Directory metrics collection timed out for {path}")
+        metrics.timed_out = True
+    except Exception as e:
+        logging.error(f"Error collecting directory metrics for {path}: {e}")
+
+    return metrics
+
+
+def _collect_dir_metrics(path: str) -> Optional[Tuple[int, int, int]]:
+    """
+    Helper function to collect directory metrics.
+    Returns (total_size, files_count, subdirs_count) or None on error.
+    """
+    try:
+        total_size = 0
+        files_count = 0
+        subdirs_count = 0
+
+        for entry in os.scandir(path):
+            try:
+                if entry.is_file(follow_symlinks=False):
+                    files_count += 1
+                    total_size += entry.stat().st_size
+                elif entry.is_dir(follow_symlinks=False):
+                    subdirs_count += 1
+                    # Recursively get subdirectory size
+                    subdir_metrics = _collect_dir_metrics(entry.path)
+                    if subdir_metrics:
+                        total_size += subdir_metrics[0]
+                        files_count += subdir_metrics[1]
+                        subdirs_count += subdir_metrics[2]
+            except (OSError, PermissionError) as e:
+                logging.warning(f"Error accessing {entry.path}: {e}")
+                continue
+
+        return total_size, files_count, subdirs_count
+    except Exception as e:
+        logging.error(f"Error in _collect_dir_metrics for {path}: {e}")
+        return None
+
+
+def compare_samples(current: dict, previous: dict) -> dict:
+    """
+    Compare two samples with improved change detection.
+
+    Args:
+        current: Current sample data
+        previous: Previous sample data
+
+    Returns:
+        Dict containing differences categorized by type
+    """
+    differences = {"new": [], "removed": [], "modified": {}}
 
     # Find new and modified items
-    for path, metrics in sample1.items():
-        if path not in sample2:
-            differences['new'].append(path)
+    for path, curr_metrics in current.items():
+        if path not in previous:
+            differences["new"].append(path)
         else:
+            prev_metrics = previous[path]
             changes = {}
+
             # Compare all metrics except sample-specific ones
-            skip_fields = {'sample_epoch'}
-            for key, value in metrics.items():
-                if key not in skip_fields and value != sample2[path].get(key):
-                    changes[key] = {
-                        'old': sample2[path].get(key),
-                        'new': value
-                    }
+            skip_fields = {"sample_epoch"}
+            for key, curr_value in curr_metrics.items():
+                if key not in skip_fields:
+                    prev_value = prev_metrics.get(key)
+                    if curr_value != prev_value:
+                        changes[key] = {"old": prev_value, "new": curr_value}
+
             if changes:
-                differences['modified'][path] = changes
+                differences["modified"][path] = changes
 
     # Find removed items
-    for path in sample2:
-        if path not in sample1:
-            differences['removed'].append(path)
+    for path in previous:
+        if path not in current:
+            differences["removed"].append(path)
 
     return differences
+
 
 def get_event_type(changes, item_type="file"):
     """
@@ -70,31 +142,32 @@ def get_event_type(changes, item_type="file"):
 
     for field, change in changes.items():
         if item_type == "file":
-            if field == 'size':
-                event_types.append('size_changed')
-            elif field == 'last_modified':
-                event_types.append('content_modified')
-            elif field == 'pattern_found':
-                old_val = change.get('old', False)
-                new_val = change.get('new', False)
+            if field == "size":
+                event_types.append("size_changed")
+            elif field == "last_modified":
+                event_types.append("content_modified")
+            elif field == "pattern_found":
+                old_val = change.get("old", False)
+                new_val = change.get("new", False)
                 if not old_val and new_val:
-                    event_types.append('pattern_found')
+                    event_types.append("pattern_found")
                 elif old_val and not new_val:
-                    event_types.append('pattern_removed')
-            elif field in ('md5', 'sha256'):
-                event_types.append('content_changed')
+                    event_types.append("pattern_removed")
+            elif field in ("md5", "sha256"):
+                event_types.append("content_changed")
         else:  # directory
-            if field == 'file_count':
-                event_types.append('files_changed')
-            elif field == 'dir_count':
-                event_types.append('subdirs_changed')
-            elif field == 'total_size':
-                event_types.append('dir_size_changed')
+            if field == "file_count":
+                event_types.append("files_changed")
+            elif field == "dir_count":
+                event_types.append("subdirs_changed")
+            elif field == "total_size":
+                event_types.append("dir_size_changed")
 
     if not event_types:
-        return 'unknown_modification'
+        return "unknown_modification"
 
-    return ','.join(sorted(set(event_types)))
+    return ",".join(sorted(set(event_types)))
+
 
 def evaluate_rule_for_file(rule, context, file_path, sample, previous_sample):
     """
@@ -112,26 +185,26 @@ def evaluate_rule_for_file(rule, context, file_path, sample, previous_sample):
     """
     # First check if the file actually changed
     if file_path not in sample or (
-        previous_sample and
-        file_path in previous_sample and
-        all(
+        previous_sample
+        and file_path in previous_sample
+        and all(
             sample[file_path].get(k) == previous_sample[file_path].get(k)
             for k in sample[file_path]
-            if k != 'sample_epoch'
+            if k != "sample_epoch"
         )
     ):
         return False, None
 
     # Now evaluate the rule condition
     file_context = context.copy()
-    file_context['file'] = sample.get(file_path, {})
-    file_context['prev_file'] = previous_sample.get(file_path, {}) if previous_sample else {}
+    file_context["file"] = sample.get(file_path, {})
+    file_context["prev_file"] = (
+        previous_sample.get(file_path, {}) if previous_sample else {}
+    )
 
     try:
         triggered = eval(
-            rule['condition'],
-            rule_helpers.build_safe_eval_context(),
-            file_context
+            rule["condition"], rule_helpers.build_safe_eval_context(), file_context
         )
     except Exception as e:
         logging.error(f"Error evaluating rule for file {file_path}: {e}")
@@ -144,13 +217,13 @@ def evaluate_rule_for_file(rule, context, file_path, sample, previous_sample):
     changes = {}
     if previous_sample and file_path in previous_sample:
         for key, value in sample[file_path].items():
-            if key != 'sample_epoch' and value != previous_sample[file_path].get(key):
+            if key != "sample_epoch" and value != previous_sample[file_path].get(key):
                 changes[key] = {
-                    'old': previous_sample[file_path].get(key),
-                    'new': value
+                    "old": previous_sample[file_path].get(key),
+                    "new": value,
                 }
 
-    event_type = get_event_type(changes) if changes else 'created'
+    event_type = get_event_type(changes) if changes else "created"
     return True, event_type
 
 
@@ -178,54 +251,106 @@ def compute_file_sha256(file_path, block_size=65536):
         return None
 
 
-def collect_sample(watch_group, log_dir):
-    """Collect sample data for the watch group."""
+def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
+    """
+    Collect sample data for the watch group with improved directory handling.
+
+    Args:
+        watch_group: Watch group configuration
+        log_dir: Directory for logs
+
+    Returns:
+        Tuple of (sample_data, sample_epoch)
+    """
     sample = {}
     sample_epoch = int(time.time())
-    watch_items = watch_group.get("watch_items", [])
-    pattern = watch_group.get("pattern")
-    max_depth = watch_group.get("max_depth", 1)
 
-    def scan_path(path, current_depth):
-        if os.path.isfile(path):
-            metrics = {}
-            try:
-                stat = os.stat(path)
-                metrics["size"] = stat.st_size
-                metrics["last_modified"] = stat.st_mtime
-                metrics["creation_time"] = stat.st_ctime
-                metrics["md5"] = compute_file_md5(path)
-                metrics["sha256"] = compute_file_sha256(path)
-                metrics["user_id"] = stat.st_uid
-                metrics["group_id"] = stat.st_gid
-                metrics["mode"] = oct(stat.st_mode & 0o777)
-                if pattern:
-                    with open(path, "r", errors="ignore") as f:
-                        content = f.read()
-                    metrics["pattern_found"] = pattern in content
-                else:
-                    metrics["pattern_found"] = False
-                sample[path] = metrics
-            except Exception as e:
-                logging.error(f"Error collecting sample for {path}: {e}")
-        elif os.path.isdir(path) and current_depth <= max_depth:
-            try:
-                for entry in os.listdir(path):
-                    full_path = os.path.join(path, entry)
-                    scan_path(full_path, current_depth + 1)
-            except Exception as e:
-                logging.error(f"Error scanning directory {path}: {e}")
+    # Get timeout configuration
+    sample_rate = watch_group.get("sample_rate", 60)
+    timeout_fraction = watch_group.get("dir_scan_timeout_fraction", 0.5)
+    timeout_seconds = max(1, sample_rate * timeout_fraction)
 
-    for item in watch_items:
-        if "*" in item or "?" in item:
-            import glob
+    def scan_path(base_path: str, current_depth: int) -> None:
+        try:
+            # Handle glob patterns
+            if any(c in base_path for c in ["*", "?", "["]):
+                import glob
 
-            for path in glob.glob(item):
-                scan_path(path, 1)
-        else:
-            scan_path(item, 1)
+                paths = glob.glob(base_path)
+            else:
+                paths = [base_path]
+
+            for path in paths:
+                try:
+                    if not os.path.exists(path):
+                        continue
+
+                    stat = os.stat(path)
+                    metrics = {
+                        "last_modified": stat.st_mtime,
+                        "creation_time": stat.st_ctime,
+                        "user_id": stat.st_uid,
+                        "group_id": stat.st_gid,
+                        "mode": stat.st_mode,
+                        "is_dir": os.path.isdir(path),
+                    }
+
+                    if metrics["is_dir"]:
+                        dir_metrics = get_dir_metrics(path, timeout_seconds)
+                        metrics.update(
+                            {
+                                "size": dir_metrics.total_size,
+                                "files_count": dir_metrics.files_count,
+                                "subdirs_count": dir_metrics.subdirs_count,
+                            }
+                        )
+
+                        if current_depth < watch_group.get("max_depth", 1):
+                            try:
+                                for entry in os.scandir(path):
+                                    if entry.is_dir(follow_symlinks=False):
+                                        scan_path(entry.path, current_depth + 1)
+                            except OSError as e:
+                                logging.error(f"Error scanning directory {path}: {e}")
+                    else:
+                        metrics.update(
+                            {
+                                "size": stat.st_size,
+                                "md5": compute_file_md5(path),
+                                "sha256": compute_file_sha256(path),
+                                "pattern_found": check_pattern(
+                                    path, watch_group.get("pattern")
+                                ),
+                            }
+                        )
+
+                    sample[path] = metrics
+
+                except OSError as e:
+                    logging.error(f"Error accessing path {path}: {e}")
+
+        except Exception as e:
+            logging.error(f"Error processing path {base_path}: {e}")
+
+    # Process each watch item
+    for item in watch_group.get("watch_items", []):
+        scan_path(item, 1)
 
     return sample, sample_epoch
+
+
+def check_pattern(file_path: str, pattern: Optional[str]) -> Optional[bool]:
+    """Check if a pattern exists in a file."""
+    if not pattern:
+        return None
+
+    try:
+        with open(file_path, "r", errors="ignore") as f:
+            content = f.read()
+            return pattern in content
+    except Exception as e:
+        logging.error(f"Error checking pattern in {file_path}: {e}")
+        return None
 
 
 class Monitor:
@@ -322,6 +447,29 @@ class Monitor:
             # Get previous sample
             previous_sample = db.get_last_n_samples(self.db_path, watch_group_name)
 
+            # Compare samples and get detailed differences
+            if previous_sample:
+                differences = compare_samples(sample, previous_sample)
+                if (
+                    differences["new"]
+                    or differences["removed"]
+                    or differences["modified"]
+                ):
+                    self.logger.debug(
+                        f"Found differences: {json.dumps(differences, indent=2)}"
+                    )
+
+                    # Log removals specifically
+                    if differences["removed"]:
+                        self.logger.info(
+                            f"Detected removed files: {differences['removed']}"
+                        )
+                else:
+                    self.logger.info("No differences found.")
+            else:
+                differences = {"new": [], "removed": [], "modified": {}}
+                self.logger.info("No previous sample found.")
+
             # Insert current sample records
             for file_path, file_data in sample.items():
                 try:
@@ -341,8 +489,10 @@ class Monitor:
 
             # Compare samples and get detailed differences
             differences = compare_samples(sample, previous_sample)
-            if differences['new'] or differences['removed'] or differences['modified']:
-                self.logger.debug(f"Found differences: {json.dumps(differences, indent=2)}")
+            if differences["new"] or differences["removed"] or differences["modified"]:
+                self.logger.debug(
+                    f"Found differences: {json.dumps(differences, indent=2)}"
+                )
             else:
                 self.logger.info("No differences found.")
 
@@ -352,7 +502,7 @@ class Monitor:
                 "data": sample,
                 "now": now,
                 "aggregate": rule_helpers.aggregate_metric,
-                "differences": differences
+                "differences": differences,
             }
 
             triggered_events = []
@@ -362,36 +512,38 @@ class Monitor:
                 affected_files = set()
 
                 # Check new files
-                for file_path in differences['new']:
+                for file_path in differences["new"]:
                     triggered, event_type = evaluate_rule_for_file(
                         rule, context, file_path, sample, previous_sample
                     )
                     if triggered:
-                        affected_files.add((file_path, event_type or 'created'))
+                        affected_files.add((file_path, event_type or "created"))
 
                 # Check modified files
-                for file_path in differences['modified']:
+                for file_path in differences["modified"]:
                     triggered, event_type = evaluate_rule_for_file(
                         rule, context, file_path, sample, previous_sample
                     )
                     if triggered:
-                        affected_files.add((file_path, event_type or 'modified'))
+                        affected_files.add((file_path, event_type or "modified"))
 
                 # Check removed files
-                for file_path in differences['removed']:
+                for file_path in differences["removed"]:
                     # Special handling for removed files since they're not in current sample
                     file_context = context.copy()
-                    file_context['file'] = previous_sample.get(file_path, {})
+                    file_context["file"] = previous_sample.get(file_path, {})
                     try:
                         triggered = eval(
-                            rule['condition'],
+                            rule["condition"],
                             rule_helpers.build_safe_eval_context(),
-                            file_context
+                            file_context,
                         )
                         if triggered:
-                            affected_files.add((file_path, 'removed'))
+                            affected_files.add((file_path, "removed"))
                     except Exception as e:
-                        self.logger.error(f"Error evaluating rule for removed file {file_path}: {e}")
+                        self.logger.error(
+                            f"Error evaluating rule for removed file {file_path}: {e}"
+                        )
 
                 # Create events for affected files
                 for file_path, event_type in affected_files:
@@ -400,20 +552,22 @@ class Monitor:
                         db.insert_event(
                             self.db_path,
                             watch_group_name,
-                            rule['name'],
+                            rule["name"],
                             sample_epoch,
                             event_type=event_type,
-                            severity=rule.get('severity'),
+                            severity=rule.get("severity"),
                             affected_files=[file_path],
                         )
 
-                        triggered_events.append({
-                            "rule": rule['name'],
-                            "event_type": event_type,
-                            "severity": rule.get('severity'),
-                            "affected_file": file_path,
-                            "sample_epoch": sample_epoch,
-                        })
+                        triggered_events.append(
+                            {
+                                "rule": rule["name"],
+                                "event_type": event_type,
+                                "severity": rule.get("severity"),
+                                "affected_file": file_path,
+                                "sample_epoch": sample_epoch,
+                            }
+                        )
                     except Exception as e:
                         self.logger.error(
                             f"Error creating event for {file_path} under rule '{rule.get('name')}': {e}"

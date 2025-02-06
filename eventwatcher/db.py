@@ -114,7 +114,7 @@ def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_dat
             watch_group, sample_epoch, file_path, size,
             user_id, group_id, mode, last_modified,
             creation_time, md5, sha256, pattern_found
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """,
         (
             watch_group,
@@ -129,6 +129,9 @@ def insert_sample_record(db_path, watch_group, sample_epoch, file_path, file_dat
             file_data.get("md5"),
             file_data.get("sha256"),
             file_data.get("pattern_found"),
+            file_data.get("is_dir"),
+            file_data.get("files_count"),
+            file_data.get("subdirs_count"),
         ),
     )
     conn.commit()

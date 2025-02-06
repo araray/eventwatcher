@@ -17,7 +17,8 @@ from pathlib import Path
 import pytest
 
 from eventwatcher import db
-from eventwatcher.monitor import Monitor, compare_samples, get_event_type, collect_sample
+from eventwatcher.monitor import (Monitor, collect_sample, compare_samples,
+                                  get_event_type)
 
 
 @pytest.fixture

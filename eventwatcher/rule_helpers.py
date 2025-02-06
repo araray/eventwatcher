@@ -9,21 +9,21 @@ import fnmatch
 
 # Define safe built-in functions that can be used in rule expressions
 SAFE_BUILTINS = {
-    'min': min,
-    'max': max,
-    'any': any,
-    'all': all,
-    'sum': sum,
-    'len': len,
-    'abs': abs,
-    'bool': bool,
-    'int': int,
-    'float': float,
-    'str': str,
-    'list': list,
-    'dict': dict,
-    'set': set,
-    'round': round
+    "min": min,
+    "max": max,
+    "any": any,
+    "all": all,
+    "sum": sum,
+    "len": len,
+    "abs": abs,
+    "bool": bool,
+    "int": int,
+    "float": float,
+    "str": str,
+    "list": list,
+    "dict": dict,
+    "set": set,
+    "round": round,
 }
 
 
