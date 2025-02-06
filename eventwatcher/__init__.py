@@ -5,4 +5,4 @@ Provides both a CLI and library API for monitoring filesystem changes
 and logging events based on user-defined rules.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
