@@ -133,7 +133,14 @@ def insert_event(
 def insert_sample_record(db_path: str, watch_group: str, sample_epoch: int,
                         file_path: str, file_data: dict):
     """
-    Insert a sample record with support for directory metrics.
+    Insert a sample record with full metrics support.
+
+    Args:
+        db_path: Path to the SQLite database
+        watch_group: Name of the watch group
+        sample_epoch: Timestamp of the sample
+        file_path: Path to the file/directory
+        file_data: Dictionary containing file/directory metrics
     """
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
@@ -141,10 +148,10 @@ def insert_sample_record(db_path: str, watch_group: str, sample_epoch: int,
     try:
         cur.execute("""
             INSERT INTO samples (
-                watch_group, sample_epoch, file_path, type, size,
-                user_id, group_id, mode, last_modified,
-                creation_time, md5, sha256, pattern_found,
-                is_dir, files_count, subdirs_count
+                watch_group, sample_epoch, file_path, type,
+                size, user_id, group_id, mode,
+                last_modified, creation_time, md5, sha256,
+                pattern_found, is_dir, files_count, subdirs_count
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             watch_group,

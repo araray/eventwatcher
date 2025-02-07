@@ -1,3 +1,14 @@
+"""
+Monitor module for EventWatcher.
+
+This module provides file and directory monitoring capabilities with support for:
+- File metrics collection (size, hashes, timestamps, permissions)
+- Directory metrics (file count, size, subdirectories)
+- Pattern matching within files
+- Directory explosion (recursive monitoring)
+- Differential analysis between samples
+"""
+
 import concurrent.futures
 import hashlib
 import json
@@ -5,9 +16,10 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple, Set
+from typing import Dict, List, Optional, Set, Tuple, Any
 
 from eventwatcher import db, rule_helpers
+
 
 class ScanTimeout(Exception):
     """Exception raised when directory scanning exceeds timeout."""
@@ -26,6 +38,34 @@ class DirectoryMetrics:
     def __post_init__(self):
         if self.children is None:
             self.children = set()
+
+
+def compute_file_hashes(path: str) -> Tuple[Optional[str], Optional[str]]:
+    """Compute MD5 and SHA256 hashes for a file."""
+    try:
+        md5 = hashlib.md5()
+        sha256 = hashlib.sha256()
+
+        with open(path, "rb") as f:
+            # Read in chunks to handle large files
+            for chunk in iter(lambda: f.read(65536), b""):
+                md5.update(chunk)
+                sha256.update(chunk)
+
+        return md5.hexdigest(), sha256.hexdigest()
+    except Exception as e:
+        logging.error(f"Error computing hashes for {path}: {e}")
+        return None, None
+
+
+def check_file_pattern(path: str, pattern: str) -> Optional[bool]:
+    """Check if a pattern exists in a file."""
+    try:
+        with open(path, "r", errors="ignore") as f:
+            return pattern in f.read()
+    except Exception as e:
+        logging.error(f"Error checking pattern in {path}: {e}")
+        return None
 
 
 def get_dir_metrics(path: str, timeout_seconds: float, explode: bool = False) -> DirectoryMetrics:
@@ -64,7 +104,13 @@ def get_dir_metrics(path: str, timeout_seconds: float, explode: bool = False) ->
 def _collect_dir_metrics(path: str, collect_children: bool = False) -> Optional[tuple]:
     """
     Helper function to collect directory metrics.
-    Returns (total_size, files_count, subdirs_count, children_paths) or None on error.
+
+    Args:
+        path: Directory path to analyze
+        collect_children: Whether to collect child paths
+
+    Returns:
+        Tuple of (total_size, files_count, subdirs_count, children_paths) or None on error
     """
     try:
         total_size = 0
@@ -100,7 +146,122 @@ def _collect_dir_metrics(path: str, collect_children: bool = False) -> Optional[
         return None
 
 
-def compare_samples(current: dict, previous: dict) -> dict:
+def process_entry(path: str, sample: dict, max_depth: int = 1, current_depth: int = 1, pattern: Optional[str] = None):
+    """
+    Process any filesystem entry (file or directory) and collect its metrics.
+    This unified function handles both files and directories, eliminating code duplication.
+    """
+    try:
+        if not os.path.exists(path):
+            logging.warning(f"Path does not exist: {path}")
+            return
+
+        # Get basic stats that apply to both files and directories
+        stat = os.stat(path)
+        is_directory = os.path.isdir(path) and not os.path.islink(path)
+
+        # Initialize base metrics common to both types
+        base_metrics = {
+            "type": "directory" if is_directory else "file",
+            "size": stat.st_size,
+            "user_id": stat.st_uid,
+            "group_id": stat.st_gid,
+            "mode": stat.st_mode,
+            "last_modified": stat.st_mtime,
+            "creation_time": stat.st_ctime,
+            "is_dir": is_directory,
+            "files_count": 0,
+            "subdirs_count": 0,
+            "md5": None,
+            "sha256": None,
+            "pattern_found": None
+        }
+
+        if is_directory:
+            total_size = 0
+            # Process directory contents if within depth limit
+            if current_depth <= max_depth:
+                with os.scandir(path) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_file(follow_symlinks=False):
+                                base_metrics["files_count"] += 1
+                                entry_stat = entry.stat()
+                                total_size += entry_stat.st_size
+                                # Process each file in directory
+                                process_entry(entry.path, sample, max_depth, current_depth + 1, pattern)
+                            elif entry.is_dir(follow_symlinks=False):
+                                base_metrics["subdirs_count"] += 1
+                                # Recursively process subdirectory
+                                process_entry(entry.path, sample, max_depth, current_depth + 1, pattern)
+                        except OSError as e:
+                            logging.error(f"Error accessing {entry.path}: {e}")
+                            continue
+
+            base_metrics["size"] = total_size
+
+        else:  # File processing
+            # Only compute hashes and check pattern for files
+            md5_hash, sha256_hash = compute_file_hashes(path)
+            pattern_match = check_file_pattern(path, pattern) if pattern else None
+
+            base_metrics.update({
+                "md5": md5_hash,
+                "sha256": sha256_hash,
+                "pattern_found": pattern_match
+            })
+
+        # Add entry to sample collection
+        sample[path] = base_metrics
+
+        # Log appropriate information based on entry type
+        if is_directory:
+            logging.info(f"Dir: {path} -> files={base_metrics['files_count']}, "
+                        f"subdirs={base_metrics['subdirs_count']}, size={base_metrics['size']}")
+        else:
+            logging.info(f"File: {path} -> size={base_metrics['size']}, "
+                        f"uid={base_metrics['user_id']}, md5={base_metrics['md5']}, "
+                        f"pattern={base_metrics['pattern_found']}")
+
+    except OSError as e:
+        logging.error(f"Error processing entry {path}: {e}")
+
+
+def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
+    """
+    Collect sample data for the watch group. This function now uses a unified approach
+    for processing both files and directories through the process_entry function.
+    """
+    sample = {}
+    sample_epoch = int(time.time())
+
+    max_depth = watch_group.get("max_depth", 1)
+    pattern = watch_group.get("pattern")
+
+    # Process each watch item using the unified process_entry function
+    for item in watch_group.get("watch_items", []):
+        try:
+            if any(c in item for c in ["*", "?", "["]):
+                # Handle glob patterns
+                import glob
+                paths = glob.glob(item)
+                logging.info(f"Glob pattern {item} matched paths: {paths}")
+                for path in paths:
+                    process_entry(path, sample, max_depth, pattern=pattern)
+            else:
+                # Process single path
+                if os.path.exists(item):
+                    process_entry(item, sample, max_depth, pattern=pattern)
+                else:
+                    logging.warning(f"Path does not exist: {item}")
+        except Exception as e:
+            logging.error(f"Error processing watch item {item}: {e}")
+
+    logging.info(f"Collected sample with {len(sample)} entries")
+    return sample, sample_epoch
+
+
+def compare_samples(current: Dict[str, Any], previous: Dict[str, Any]) -> Dict[str, Any]:
     """
     Compare two samples with improved change detection.
 
@@ -147,19 +308,16 @@ def compare_samples(current: dict, previous: dict) -> dict:
     return differences
 
 
-def get_event_type(changes, item_type="file"):
+def get_event_type(changes: Dict[str, Any], item_type: str = "file") -> str:
     """
     Determine specific event type based on the changes detected.
 
     Args:
-        changes (dict): Changes detected for the item
-        item_type (str): Either "file" or "directory"
-
-    Args:
-        changes (dict): Changes detected for a specific file/directory
+        changes: Changes detected for the item
+        item_type: Either "file" or "directory"
 
     Returns:
-        str: Detailed event type description
+        Detailed event type description
     """
     event_types = []
 
@@ -179,11 +337,11 @@ def get_event_type(changes, item_type="file"):
             elif field in ("md5", "sha256"):
                 event_types.append("content_changed")
         else:  # directory
-            if field == "file_count":
+            if field == "files_count":
                 event_types.append("files_changed")
-            elif field == "dir_count":
+            elif field == "subdirs_count":
                 event_types.append("subdirs_changed")
-            elif field == "total_size":
+            elif field == "size":
                 event_types.append("dir_size_changed")
 
     if not event_types:
@@ -192,301 +350,29 @@ def get_event_type(changes, item_type="file"):
     return ",".join(sorted(set(event_types)))
 
 
-def evaluate_rule_for_file(rule, context, file_path, sample, previous_sample):
-    """
-    Evaluate a rule for a specific file, checking if it actually changed.
-
-    Args:
-        rule (dict): Rule configuration
-        context (dict): Evaluation context
-        file_path (str): Path to the file being evaluated
-        sample (dict): Current sample data
-        previous_sample (dict): Previous sample data
-
-    Returns:
-        tuple: (triggered, event_type)
-    """
-    # First check if the file actually changed
-    if file_path not in sample or (
-        previous_sample
-        and file_path in previous_sample
-        and all(
-            sample[file_path].get(k) == previous_sample[file_path].get(k)
-            for k in sample[file_path]
-            if k != "sample_epoch"
-        )
-    ):
-        return False, None
-
-    # Now evaluate the rule condition
-    file_context = context.copy()
-    file_context["file"] = sample.get(file_path, {})
-    file_context["prev_file"] = (
-        previous_sample.get(file_path, {}) if previous_sample else {}
-    )
-
-    try:
-        triggered = eval(
-            rule["condition"], rule_helpers.build_safe_eval_context(), file_context
-        )
-    except Exception as e:
-        logging.error(f"Error evaluating rule for file {file_path}: {e}")
-        return False, None
-
-    if not triggered:
-        return False, None
-
-    # Determine the specific type of change
-    changes = {}
-    if previous_sample and file_path in previous_sample:
-        for key, value in sample[file_path].items():
-            if key != "sample_epoch" and value != previous_sample[file_path].get(key):
-                changes[key] = {
-                    "old": previous_sample[file_path].get(key),
-                    "new": value,
-                }
-
-    event_type = get_event_type(changes) if changes else "created"
-    return True, event_type
-
-
-def compute_file_md5(file_path: str, block_size: int = 65536) -> Optional[str]:
-    """Compute MD5 hash of a file."""
-    import hashlib
-    try:
-        md5 = hashlib.md5()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(block_size), b""):
-                md5.update(chunk)
-        return md5.hexdigest()
-    except Exception as e:
-        logging.error(f"Error computing MD5 for {file_path}: {e}")
-        return None
-
-
-def compute_file_sha256(file_path: str, block_size: int = 65536) -> Optional[str]:
-    """Compute SHA256 hash of a file."""
-    import hashlib
-    try:
-        sha256 = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            for chunk in iter(lambda: f.read(block_size), b""):
-                sha256.update(chunk)
-        return sha256.hexdigest()
-    except Exception as e:
-        logging.error(f"Error computing SHA256 for {file_path}: {e}")
-        return None
-
-
-def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
-    """
-    Collect sample data for the watch group with directory explosion support and
-    timeout handling. When explode_directories is true, creates separate entries
-    for all files and subdirectories within watched directories.
-
-    The scanning process is bounded by a timeout calculated as a fraction of the
-    sample_rate. This ensures we don't spend too much time scanning large directories
-    and potentially miss our next sampling interval.
-
-    Args:
-        watch_group: Watch group configuration
-        log_dir: Directory for logs
-
-    Returns:
-        Tuple of (sample_data, sample_epoch)
-    """
-    sample = {}
-    sample_epoch = int(time.time())
-
-    # Get configuration
-    sample_rate = watch_group.get("sample_rate", 60)
-    timeout_fraction = watch_group.get("dir_scan_timeout_fraction", 0.5)
-    timeout_seconds = max(1, int(sample_rate * timeout_fraction))
-    max_depth = watch_group.get("max_depth", 1)
-    explode_dirs = watch_group.get("explode_directories", False)
-    pattern = watch_group.get("pattern")
-
-    # Track scan start time for timeout handling
-    scan_start_time = time.time()
-
-    def check_timeout():
-        """Check if we've exceeded our scanning timeout."""
-        if time.time() - scan_start_time > timeout_seconds:
-            raise ScanTimeout("Directory scanning timeout exceeded")
-
-    def process_entry(path: str, current_depth: int, time_remaining: float) -> None:
-        """
-        Process a single file or directory entry with timeout handling.
-
-        Args:
-            path: Path to process
-            current_depth: Current recursion depth
-            time_remaining: Seconds remaining before timeout
-        """
-        try:
-            # Check timeout before processing each entry
-            check_timeout()
-
-            if not os.path.exists(path):
-                return
-
-            stat = os.stat(path)
-            is_directory = os.path.isdir(path)
-
-            # Base metrics for both files and directories
-            metrics = {
-                "type": "directory" if is_directory else "file",
-                "last_modified": stat.st_mtime,
-                "creation_time": stat.st_ctime,
-                "user_id": stat.st_uid,
-                "group_id": stat.st_gid,
-                "mode": stat.st_mode,
-                "is_dir": is_directory,
-                "size": stat.st_size if not is_directory else 0,
-                "files_count": 0,
-                "subdirs_count": 0
-            }
-
-            if is_directory:
-                try:
-                    # Use a ThreadPoolExecutor for directory scanning with timeout
-                    with concurrent.futures.ThreadPoolExecutor() as executor:
-                        future = executor.submit(scan_directory, path, current_depth)
-                        try:
-                            dir_results = future.result(timeout=time_remaining)
-                            if dir_results:
-                                total_size, files_count, subdirs_count = dir_results
-                                metrics.update({
-                                    "size": total_size,
-                                    "files_count": files_count,
-                                    "subdirs_count": subdirs_count
-                                })
-                        except concurrent.futures.TimeoutError:
-                            logging.warning(f"Directory scan timed out for {path}")
-                            metrics.update({
-                                "size": -1,
-                                "files_count": -1,
-                                "subdirs_count": -1
-                            })
-                except Exception as e:
-                    logging.error(f"Error scanning directory {path}: {e}")
-                    metrics.update({
-                        "size": -1,
-                        "files_count": -1,
-                        "subdirs_count": -1
-                    })
-            else:
-                # For files, compute hashes and check pattern
-                try:
-                    metrics.update({
-                        "md5": compute_file_md5(path),
-                        "sha256": compute_file_sha256(path),
-                        "pattern_found": check_pattern(path, pattern) if pattern else None
-                    })
-                except Exception as e:
-                    logging.error(f"Error computing file metrics for {path}: {e}")
-
-            # Add entry to samples
-            sample[path] = metrics
-
-        except ScanTimeout:
-            raise  # Re-raise timeout to handle it at top level
-        except OSError as e:
-            logging.error(f"Error processing entry {path}: {e}")
-        except Exception as e:
-            logging.error(f"Unexpected error processing {path}: {e}")
-
-    def scan_directory(path: str, current_depth: int) -> Optional[Tuple[int, int, int]]:
-        """
-        Scan a directory to collect metrics and process children if needed.
-        Returns (total_size, files_count, subdirs_count) or None on error.
-        """
-        total_size = 0
-        files_count = 0
-        subdirs_count = 0
-
-        try:
-            with os.scandir(path) as entries:
-                for entry in entries:
-                    # Check timeout for each entry
-                    check_timeout()
-
-                    try:
-                        if entry.is_file(follow_symlinks=False):
-                            files_count += 1
-                            total_size += entry.stat().st_size
-                        elif entry.is_dir(follow_symlinks=False):
-                            subdirs_count += 1
-
-                            # If exploding directories and within depth limit,
-                            # process this child entry
-                            if explode_dirs and current_depth < max_depth:
-                                time_remaining = timeout_seconds - (time.time() - scan_start_time)
-                                if time_remaining > 0:
-                                    process_entry(entry.path, current_depth + 1, time_remaining)
-
-                    except (OSError, PermissionError) as e:
-                        logging.warning(f"Error accessing {entry.path}: {e}")
-                        continue
-
-            return total_size, files_count, subdirs_count
-
-        except Exception as e:
-            logging.error(f"Error scanning directory {path}: {e}")
-            return None
-
-    def process_watch_item(base_path: str) -> None:
-        """Process a watch item, handling glob patterns."""
-        try:
-            # Handle glob patterns
-            if any(c in base_path for c in ["*", "?", "["]):
-                import glob
-                paths = glob.glob(base_path)
-            else:
-                paths = [base_path]
-
-            for path in paths:
-                time_remaining = timeout_seconds - (time.time() - scan_start_time)
-                if time_remaining <= 0:
-                    raise ScanTimeout("Directory scanning timeout exceeded")
-                process_entry(path, 1, time_remaining)
-
-        except ScanTimeout:
-            logging.warning(f"Timeout while processing watch item {base_path}")
-        except Exception as e:
-            logging.error(f"Error processing watch item {base_path}: {e}")
-
-    # Process each watch item
-    try:
-        for item in watch_group.get("watch_items", []):
-            process_watch_item(item)
-    except ScanTimeout:
-        logging.warning("Directory scanning timeout reached. Some entries may be incomplete.")
-
-    return sample, sample_epoch
-
-
-def check_pattern(file_path: str, pattern: str) -> Optional[bool]:
-    """Check if a pattern exists in a file."""
-    try:
-        with open(file_path, "r", errors="ignore") as f:
-            content = f.read()
-            return pattern in content
-    except Exception as e:
-        logging.error(f"Error checking pattern in {file_path}: {e}")
-        return None
-
-
 class Monitor:
-    def __init__(self, watch_group, db_path, log_dir, log_level="INFO"):
+    """
+    Monitor class that tracks changes in files and directories.
+
+    Attributes:
+        watch_group: Watch group configuration
+        db_path: Path to the database
+        log_dir: Directory for log files
+        log_level: Logging level to use
+        logger: Logger instance
+        _stop: Stop flag for monitoring loop
+    """
+
+    def __init__(self, watch_group: dict, db_path: str, log_dir: str,
+                 log_level: str = "INFO"):
         """
         Initialize a monitor instance.
 
         Args:
-            watch_group (dict): Watch group configuration
-            db_path (str): Path to the database file
-            log_dir (str): Base directory for logs
-            log_level (str): Logging level
+            watch_group: Watch group configuration
+            db_path: Path to the database file
+            log_dir: Base directory for logs
+            log_level: Logging level
         """
         self.watch_group = watch_group
         self.db_path = db_path
@@ -502,7 +388,12 @@ class Monitor:
         self.logger = self.setup_logger()
 
     def setup_logger(self):
-        """Set up logging for this monitor instance."""
+        """
+        Set up logging for this monitor instance.
+
+        Returns:
+            logging.Logger: Configured logger instance
+        """
         try:
             from eventwatcher import logger as event_logger
 
@@ -547,7 +438,6 @@ class Monitor:
         except Exception as e:
             # Print the full error
             import traceback
-
             print(f"Failed to setup monitor logger: {e}")
             print("Full traceback:")
             traceback.print_exc()
@@ -561,8 +451,73 @@ class Monitor:
             )
             return basic_logger
 
-    def run_once(self):
-        """Run one monitoring cycle."""
+    def evaluate_rule_for_file(self, rule: dict, context: dict, file_path: str,
+                             sample: dict, previous_sample: Optional[dict]) -> Tuple[bool, Optional[str]]:
+        """
+        Evaluate a rule for a specific file, checking if it actually changed.
+
+        Args:
+            rule: Rule configuration
+            context: Evaluation context
+            file_path: Path to the file being evaluated
+            sample: Current sample data
+            previous_sample: Previous sample data
+
+        Returns:
+            Tuple of (triggered, event_type)
+        """
+        # First check if the file actually changed
+        if file_path not in sample or (
+            previous_sample
+            and file_path in previous_sample
+            and all(
+                sample[file_path].get(k) == previous_sample[file_path].get(k)
+                for k in sample[file_path]
+                if k != "sample_epoch"
+            )
+        ):
+            return False, None
+
+        # Now evaluate the rule condition
+        file_context = context.copy()
+        file_context["file"] = sample.get(file_path, {})
+        file_context["prev_file"] = (
+            previous_sample.get(file_path, {}) if previous_sample else {}
+        )
+
+        try:
+            triggered = eval(
+                rule["condition"],
+                rule_helpers.build_safe_eval_context(),
+                file_context
+            )
+        except Exception as e:
+            self.logger.error(f"Error evaluating rule for file {file_path}: {e}")
+            return False, None
+
+        if not triggered:
+            return False, None
+
+        # Determine the specific type of change
+        changes = {}
+        if previous_sample and file_path in previous_sample:
+            for key, value in sample[file_path].items():
+                if key != "sample_epoch" and value != previous_sample[file_path].get(key):
+                    changes[key] = {
+                        "old": previous_sample[file_path].get(key),
+                        "new": value,
+                    }
+
+        event_type = get_event_type(changes) if changes else "created"
+        return True, event_type
+
+    def run_once(self) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+        """
+        Run one monitoring cycle.
+
+        Returns:
+            Tuple of (sample_data, triggered_events)
+        """
         try:
             self.logger.info("Starting monitoring cycle.")
             sample, sample_epoch = collect_sample(self.watch_group, self.log_dir)
@@ -611,15 +566,6 @@ class Monitor:
                 self.logger.info("No previous sample found; skipping rule evaluation.")
                 return sample, []
 
-            # Compare samples and get detailed differences
-            differences = compare_samples(sample, previous_sample)
-            if differences["new"] or differences["removed"] or differences["modified"]:
-                self.logger.debug(
-                    f"Found differences: {json.dumps(differences, indent=2)}"
-                )
-            else:
-                self.logger.info("No differences found.")
-
             # Evaluate rules
             now = int(time.time())
             context = {
@@ -637,7 +583,7 @@ class Monitor:
 
                 # Check new files
                 for file_path in differences["new"]:
-                    triggered, event_type = evaluate_rule_for_file(
+                    triggered, event_type = self.evaluate_rule_for_file(
                         rule, context, file_path, sample, previous_sample
                     )
                     if triggered:
@@ -645,7 +591,7 @@ class Monitor:
 
                 # Check modified files
                 for file_path in differences["modified"]:
-                    triggered, event_type = evaluate_rule_for_file(
+                    triggered, event_type = self.evaluate_rule_for_file(
                         rule, context, file_path, sample, previous_sample
                     )
                     if triggered:
