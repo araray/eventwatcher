@@ -16,7 +16,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple, Any
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from eventwatcher import db, rule_helpers
 
