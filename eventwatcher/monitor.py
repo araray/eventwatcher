@@ -9,6 +9,10 @@ from typing import Optional, Tuple, Set
 
 from eventwatcher import db, rule_helpers
 
+class ScanTimeout(Exception):
+    """Exception raised when directory scanning exceeds timeout."""
+    pass
+
 
 @dataclass
 class DirectoryMetrics:
@@ -246,34 +250,43 @@ def evaluate_rule_for_file(rule, context, file_path, sample, previous_sample):
     return True, event_type
 
 
-def compute_file_md5(file_path, block_size=65536):
+def compute_file_md5(file_path: str, block_size: int = 65536) -> Optional[str]:
     """Compute MD5 hash of a file."""
-    md5 = hashlib.md5()
+    import hashlib
     try:
+        md5 = hashlib.md5()
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(block_size), b""):
                 md5.update(chunk)
         return md5.hexdigest()
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error computing MD5 for {file_path}: {e}")
         return None
 
 
-def compute_file_sha256(file_path, block_size=65536):
+def compute_file_sha256(file_path: str, block_size: int = 65536) -> Optional[str]:
     """Compute SHA256 hash of a file."""
-    sha256 = hashlib.sha256()
+    import hashlib
     try:
+        sha256 = hashlib.sha256()
         with open(file_path, "rb") as f:
             for chunk in iter(lambda: f.read(block_size), b""):
                 sha256.update(chunk)
         return sha256.hexdigest()
-    except Exception:
+    except Exception as e:
+        logging.error(f"Error computing SHA256 for {file_path}: {e}")
         return None
 
 
 def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
     """
-    Collect sample data for the watch group with improved directory handling
-    and directory explosion support.
+    Collect sample data for the watch group with directory explosion support and
+    timeout handling. When explode_directories is true, creates separate entries
+    for all files and subdirectories within watched directories.
+
+    The scanning process is bounded by a timeout calculated as a fraction of the
+    sample_rate. This ensures we don't spend too much time scanning large directories
+    and potentially miss our next sampling interval.
 
     Args:
         watch_group: Watch group configuration
@@ -288,11 +301,142 @@ def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
     # Get configuration
     sample_rate = watch_group.get("sample_rate", 60)
     timeout_fraction = watch_group.get("dir_scan_timeout_fraction", 0.5)
-    timeout_seconds = max(1, sample_rate * timeout_fraction)
+    timeout_seconds = max(1, int(sample_rate * timeout_fraction))
     max_depth = watch_group.get("max_depth", 1)
     explode_dirs = watch_group.get("explode_directories", False)
+    pattern = watch_group.get("pattern")
 
-    def scan_path(base_path: str, current_depth: int) -> None:
+    # Track scan start time for timeout handling
+    scan_start_time = time.time()
+
+    def check_timeout():
+        """Check if we've exceeded our scanning timeout."""
+        if time.time() - scan_start_time > timeout_seconds:
+            raise ScanTimeout("Directory scanning timeout exceeded")
+
+    def process_entry(path: str, current_depth: int, time_remaining: float) -> None:
+        """
+        Process a single file or directory entry with timeout handling.
+
+        Args:
+            path: Path to process
+            current_depth: Current recursion depth
+            time_remaining: Seconds remaining before timeout
+        """
+        try:
+            # Check timeout before processing each entry
+            check_timeout()
+
+            if not os.path.exists(path):
+                return
+
+            stat = os.stat(path)
+            is_directory = os.path.isdir(path)
+
+            # Base metrics for both files and directories
+            metrics = {
+                "type": "directory" if is_directory else "file",
+                "last_modified": stat.st_mtime,
+                "creation_time": stat.st_ctime,
+                "user_id": stat.st_uid,
+                "group_id": stat.st_gid,
+                "mode": stat.st_mode,
+                "is_dir": is_directory,
+                "size": stat.st_size if not is_directory else 0,
+                "files_count": 0,
+                "subdirs_count": 0
+            }
+
+            if is_directory:
+                try:
+                    # Use a ThreadPoolExecutor for directory scanning with timeout
+                    with concurrent.futures.ThreadPoolExecutor() as executor:
+                        future = executor.submit(scan_directory, path, current_depth)
+                        try:
+                            dir_results = future.result(timeout=time_remaining)
+                            if dir_results:
+                                total_size, files_count, subdirs_count = dir_results
+                                metrics.update({
+                                    "size": total_size,
+                                    "files_count": files_count,
+                                    "subdirs_count": subdirs_count
+                                })
+                        except concurrent.futures.TimeoutError:
+                            logging.warning(f"Directory scan timed out for {path}")
+                            metrics.update({
+                                "size": -1,
+                                "files_count": -1,
+                                "subdirs_count": -1
+                            })
+                except Exception as e:
+                    logging.error(f"Error scanning directory {path}: {e}")
+                    metrics.update({
+                        "size": -1,
+                        "files_count": -1,
+                        "subdirs_count": -1
+                    })
+            else:
+                # For files, compute hashes and check pattern
+                try:
+                    metrics.update({
+                        "md5": compute_file_md5(path),
+                        "sha256": compute_file_sha256(path),
+                        "pattern_found": check_pattern(path, pattern) if pattern else None
+                    })
+                except Exception as e:
+                    logging.error(f"Error computing file metrics for {path}: {e}")
+
+            # Add entry to samples
+            sample[path] = metrics
+
+        except ScanTimeout:
+            raise  # Re-raise timeout to handle it at top level
+        except OSError as e:
+            logging.error(f"Error processing entry {path}: {e}")
+        except Exception as e:
+            logging.error(f"Unexpected error processing {path}: {e}")
+
+    def scan_directory(path: str, current_depth: int) -> Optional[Tuple[int, int, int]]:
+        """
+        Scan a directory to collect metrics and process children if needed.
+        Returns (total_size, files_count, subdirs_count) or None on error.
+        """
+        total_size = 0
+        files_count = 0
+        subdirs_count = 0
+
+        try:
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    # Check timeout for each entry
+                    check_timeout()
+
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            files_count += 1
+                            total_size += entry.stat().st_size
+                        elif entry.is_dir(follow_symlinks=False):
+                            subdirs_count += 1
+
+                            # If exploding directories and within depth limit,
+                            # process this child entry
+                            if explode_dirs and current_depth < max_depth:
+                                time_remaining = timeout_seconds - (time.time() - scan_start_time)
+                                if time_remaining > 0:
+                                    process_entry(entry.path, current_depth + 1, time_remaining)
+
+                    except (OSError, PermissionError) as e:
+                        logging.warning(f"Error accessing {entry.path}: {e}")
+                        continue
+
+            return total_size, files_count, subdirs_count
+
+        except Exception as e:
+            logging.error(f"Error scanning directory {path}: {e}")
+            return None
+
+    def process_watch_item(base_path: str) -> None:
+        """Process a watch item, handling glob patterns."""
         try:
             # Handle glob patterns
             if any(c in base_path for c in ["*", "?", "["]):
@@ -302,68 +446,28 @@ def collect_sample(watch_group: dict, log_dir: str) -> Tuple[dict, int]:
                 paths = [base_path]
 
             for path in paths:
-                try:
-                    if not os.path.exists(path):
-                        continue
+                time_remaining = timeout_seconds - (time.time() - scan_start_time)
+                if time_remaining <= 0:
+                    raise ScanTimeout("Directory scanning timeout exceeded")
+                process_entry(path, 1, time_remaining)
 
-                    stat = os.stat(path)
-                    is_directory = os.path.isdir(path)
-
-                    # Base metrics for both files and directories
-                    metrics = {
-                        "type": "directory" if is_directory else "file",
-                        "last_modified": stat.st_mtime,
-                        "creation_time": stat.st_ctime,
-                        "user_id": stat.st_uid,
-                        "group_id": stat.st_gid,
-                        "mode": stat.st_mode,
-                        "is_dir": is_directory
-                    }
-
-                    if is_directory:
-                        # Collect directory metrics with explosion if configured
-                        dir_metrics = get_dir_metrics(path, timeout_seconds, explode_dirs)
-                        metrics.update({
-                            "size": dir_metrics.total_size,
-                            "files_count": dir_metrics.files_count,
-                            "subdirs_count": dir_metrics.subdirs_count
-                        })
-
-                        # Add the directory entry to samples
-                        sample[path] = metrics
-
-                        # Handle directory explosion
-                        if explode_dirs and dir_metrics.children and current_depth < max_depth:
-                            for child_path in dir_metrics.children:
-                                scan_path(child_path, current_depth + 1)
-                    else:
-                        # File-specific metrics
-                        metrics.update({
-                            "size": stat.st_size,
-                            "md5": compute_file_md5(path),
-                            "sha256": compute_file_sha256(path),
-                            "pattern_found": check_pattern(path, watch_group.get("pattern"))
-                        })
-                        sample[path] = metrics
-
-                except OSError as e:
-                    logging.error(f"Error accessing path {path}: {e}")
-
+        except ScanTimeout:
+            logging.warning(f"Timeout while processing watch item {base_path}")
         except Exception as e:
-            logging.error(f"Error processing path {base_path}: {e}")
+            logging.error(f"Error processing watch item {base_path}: {e}")
 
     # Process each watch item
-    for item in watch_group.get("watch_items", []):
-        scan_path(item, 1)
+    try:
+        for item in watch_group.get("watch_items", []):
+            process_watch_item(item)
+    except ScanTimeout:
+        logging.warning("Directory scanning timeout reached. Some entries may be incomplete.")
 
     return sample, sample_epoch
 
 
-def check_pattern(file_path: str, pattern: Optional[str]) -> Optional[bool]:
+def check_pattern(file_path: str, pattern: str) -> Optional[bool]:
     """Check if a pattern exists in a file."""
-    if not pattern:
-        return None
-
     try:
         with open(file_path, "r", errors="ignore") as f:
             content = f.read()
