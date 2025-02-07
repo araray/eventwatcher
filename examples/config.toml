@@ -15,3 +15,6 @@ log_dir = "PATH_TO/logs"
 # Logging level can be one of: DEBUG, INFO, WARNING, ERROR, CRITICAL.
 level = "INFO"
 
+[monitoring]
+# Fraction of sample_rate to use as timeout for directory scanning (0.0 to 1.0)
+dir_scan_timeout_fraction = 0.5
