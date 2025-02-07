@@ -28,11 +28,11 @@ def migrate_db_schema(db_path: str):
         columns = {col[1] for col in cur.fetchall()}
 
         # Add new columns if they don't exist
-        if 'is_dir' not in columns:
+        if "is_dir" not in columns:
             cur.execute("ALTER TABLE samples ADD COLUMN is_dir BOOLEAN")
-        if 'files_count' not in columns:
+        if "files_count" not in columns:
             cur.execute("ALTER TABLE samples ADD COLUMN files_count INTEGER")
-        if 'subdirs_count' not in columns:
+        if "subdirs_count" not in columns:
             cur.execute("ALTER TABLE samples ADD COLUMN subdirs_count INTEGER")
 
         conn.commit()
@@ -54,7 +54,8 @@ def init_db(db_path: str):
     cur = conn.cursor()
 
     # Create events table
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             event_uid TEXT NOT NULL,
@@ -67,10 +68,12 @@ def init_db(db_path: str):
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
             UNIQUE(event_uid)
         )
-    """)
+    """
+    )
 
     # Create samples table
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS samples (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             watch_group TEXT NOT NULL,
@@ -90,7 +93,8 @@ def init_db(db_path: str):
             files_count INTEGER,
             subdirs_count INTEGER
         )
-    """)
+    """
+    )
 
     conn.commit()
     conn.close()
@@ -130,8 +134,9 @@ def insert_event(
     conn.close()
 
 
-def insert_sample_record(db_path: str, watch_group: str, sample_epoch: int,
-                        file_path: str, file_data: dict):
+def insert_sample_record(
+    db_path: str, watch_group: str, sample_epoch: int, file_path: str, file_data: dict
+):
     """
     Insert a sample record with full metrics support.
 
@@ -146,31 +151,34 @@ def insert_sample_record(db_path: str, watch_group: str, sample_epoch: int,
     cur = conn.cursor()
 
     try:
-        cur.execute("""
+        cur.execute(
+            """
             INSERT INTO samples (
                 watch_group, sample_epoch, file_path, type,
                 size, user_id, group_id, mode,
                 last_modified, creation_time, md5, sha256,
                 pattern_found, is_dir, files_count, subdirs_count
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            watch_group,
-            sample_epoch,
-            file_path,
-            file_data.get("type"),
-            file_data.get("size"),
-            file_data.get("user_id"),
-            file_data.get("group_id"),
-            file_data.get("mode"),
-            file_data.get("last_modified"),
-            file_data.get("creation_time"),
-            file_data.get("md5"),
-            file_data.get("sha256"),
-            file_data.get("pattern_found"),
-            file_data.get("is_dir", False),
-            file_data.get("files_count"),
-            file_data.get("subdirs_count")
-        ))
+        """,
+            (
+                watch_group,
+                sample_epoch,
+                file_path,
+                file_data.get("type"),
+                file_data.get("size"),
+                file_data.get("user_id"),
+                file_data.get("group_id"),
+                file_data.get("mode"),
+                file_data.get("last_modified"),
+                file_data.get("creation_time"),
+                file_data.get("md5"),
+                file_data.get("sha256"),
+                file_data.get("pattern_found"),
+                file_data.get("is_dir", False),
+                file_data.get("files_count"),
+                file_data.get("subdirs_count"),
+            ),
+        )
 
         conn.commit()
 
