@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+
+dir_evw=""
+evw_config=""
+evw_venv=""
+evw_params=$@
+params_count=$#
+
+function check_env_var() {
+    local env_var=$1
+    local var_value=${!env_var}
+
+    if [[ -n "${var_value}" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function is_dir() {
+    local dir=$1
+    if [[ -d "${dir}" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function is_file() {
+    local file=$1
+    if [[ -f "${file}" ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+function check_params() {
+    local tcfg=""
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            "-c"|"--config")
+                shift
+                if [[ $# -gt 0 ]]; then
+                    tcfg="$1"
+                    # if is_file "${tcfg}"; then
+                    #     echo "${tcfg}"
+                    # fi
+                    echo "${tcfg}"
+                    break
+                fi
+                ;;
+        esac
+        shift
+    done
+}
+
+if check_env_var "EVENTWATCHER_DIR" && is_file "${EVENTWATCHER_DIR}/.EVENTWATCHER_DIR"; then
+    dir_evw="${EVENTWATCHER_DIR}"
+elif is_file "${PWD}/.EVENTWATCHER_DIR"; then
+    dir_evw="${PWD}"
+    if is_file "${dir_evw}/venv/pyvenv.cfg"; then
+        evw_venv="${dir_evw}/venv"
+    fi
+fi
+
+if check_env_var "EVENTWATCHER_VENV" && is_dir "${EVENTWATCHER_VENV}"; then
+    if is_file "${EVENTWATCHER_VENV}/pyvenv.cfg"; then
+        evw_venv="${EVENTWATCHER_VENV}"
+    fi
+fi
+
+evw_config=$(check_params ${evw_params})
+
+evw_f=false
+if [[ -z ${evw_config} ]]; then
+    evw_f=true
+    if check_env_var "EVENTWATCHER_CONFIG"; then
+        if is_file "${EVENTWATCHER_CONFIG}"; then
+            evw_config="${EVENTWATCHER_CONFIG}"
+        elif is_dir "${EVENTWATCHER_CONFIG}" && is_file "${EVENTWATCHER_CONFIG}/config.toml"; then
+            evw_config="${EVENTWATCHER_CONFIG}/config.toml"
+        else
+            echo "Error: Invalid EVENTWATCHER_CONFIG environment variable."
+        fi
+    elif [[ -n "${dir_evw}" ]] && is_file "${dir_evw}/config.toml"; then
+        evw_config="${dir_evw}/config.toml"
+    elif is_file "${HOME}/.config/eventwatcher/config.toml"; then
+        evw_config="${HOME}/.config/eventwatcher/config.toml"
+    elif is_file "${PWD}/config.toml"; then
+        evw_config="${PWD}/config.toml"
+    else
+        echo "Error: No configuration file found."
+        exit 1
+    fi
+fi
+
+if ${evw_f}; then
+    evw_params="-c ${evw_config} $*"
+else
+    params_count=$(( params_count-2 ))
+fi
+
+if [[ ${params_count} -le 0 ]]; then
+    evw_params="--help"
+fi
+
+if eventwatcher status > /dev/null 2>&1; then
+    eventwatcher ${evw_params}
+elif [[ -n ${evw_venv} ]]; then
+    source "${evw_venv}/bin/activate"
+    eventwatcher ${evw_params}
+    deactivate
+fi
