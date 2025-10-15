@@ -12,9 +12,9 @@ old-docs/
 .localflow/
 wgconf/
 next/
-/config.toml
+config.toml
 !examples/config.toml
-/watch_groups.yaml
+watch_groups.yaml
 !examples/watch_groups.yaml
 *.test
 logs/
